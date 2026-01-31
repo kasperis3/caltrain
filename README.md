@@ -73,6 +73,18 @@ The backend reads `API_KEY` from root `.env` (via `env_file` in docker-compose).
 
 **Automatic config:** nginx auto-generates the HTTPS config from the template when certs exist, so `git pull` + `docker compose up` keeps HTTPS working without manual steps.
 
+### GitHub Actions auto-deploy
+
+On push to `main`, a workflow SSHs into your server, runs `git pull`, then `docker compose up -d --build`.
+
+1. Add these **GitHub repository secrets** (Settings → Secrets and variables → Actions):
+   - **SERVER_HOST** — Server IP or hostname (e.g. `138.68.43.227`)
+   - **SERVER_USER** — SSH user (e.g. `root`)
+   - **SSH_PRIVATE_KEY** — Private key for SSH (the full PEM content, no passphrase)
+   - **SERVER_PATH** — Path to the app on the server (e.g. `/root/app`)
+
+2. Ensure the server has the repo cloned and the deploy key (or your SSH key) can `git pull` from the remote.
+
 ### Request logging
 
 nginx logs requests to stdout. View logs with:

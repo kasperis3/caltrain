@@ -235,9 +235,9 @@ if stop_ids_seen and stop_id not in stop_ids_seen:
     test_stops.append(list(stop_ids_seen)[0])
 for test_stop in test_stops:
     try:
-        trains = caltrain.get_next_trains(test_stop, limit=5)
-        print(f"  Stop {test_stop}: {len(trains)} train(s)")
-        for i, t in enumerate(trains[:3]):
+        visits, source = caltrain.get_next_trains(test_stop, limit=5)
+        print(f"  Stop {test_stop}: {len(visits)} train(s) (source: {source})")
+        for i, t in enumerate(visits[:3]):
             print(f"    {i+1}. {t.get('line_ref', '?')} -> {t.get('destination', '?')} @ {t.get('expected_departure_local', '?')}")
     except Exception as e:
         print(f"  ERROR: {e}")

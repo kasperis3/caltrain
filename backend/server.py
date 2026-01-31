@@ -14,9 +14,21 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 # Support both: run from repo root (uvicorn backend.server:app) and from app root (uvicorn server:app, e.g. Docker/Render)
 try:
-    from backend.caltrain import get_next_trains, get_caltrain_stops, get_stops_in_direction, next_trains
+    from backend.caltrain import (
+        check_511_api_health,
+        get_next_trains,
+        get_caltrain_stops,
+        get_stops_in_direction,
+        next_trains,
+    )
 except ModuleNotFoundError:
-    from caltrain import get_next_trains, get_caltrain_stops, get_stops_in_direction, next_trains
+    from caltrain import (
+        check_511_api_health,
+        get_next_trains,
+        get_caltrain_stops,
+        get_stops_in_direction,
+        next_trains,
+    )
 
 app = FastAPI(
     title="Caltrain API",
@@ -60,6 +72,13 @@ if _frontend_dir.exists():
 api_router = APIRouter(prefix="/api", tags=["api"])
 
 
+@api_router.get("/health")
+def health():
+    """Check if the 511 API is reachable and healthy."""
+    ok = check_511_api_health()
+    return {"status": "ok" if ok else "degraded", "511_api": "healthy" if ok else "unreachable"}
+
+
 @api_router.get("/stops")
 def stops():
     """List all Caltrain stops (id + name)."""
@@ -69,7 +88,8 @@ def stops():
 @api_router.get("/stops/{stop_id}/trains")
 def trains(stop_id: str, limit: int | None = 10):
     """Next train predictions at a stop. Optional query: limit (default 10)."""
-    return get_next_trains(stop_id, limit=limit)
+    visits, source = get_next_trains(stop_id, limit=limit)
+    return {"visits": visits, "data_source": source}
 
 
 @api_router.get("/stops_in_direction")

@@ -286,6 +286,13 @@
       headerTime.textContent = "Departure Time" + tz;
     }
     if (refreshed) refreshed.textContent = refreshedNow();
+    var sourceEl = el("data-source");
+    if (sourceEl) {
+      var labels = { gtfs_realtime: "Real-time", stop_timetable: "Scheduled", stop_monitoring: "Live" };
+      var label = labels[data.data_source] || "";
+      sourceEl.textContent = label ? "Source: " + label + " feed" : "";
+      sourceEl.style.display = label ? "" : "none";
+    }
     if (seeMore) {
       seeMore.style.display = trains.length >= limit ? "" : "none";
       seeMore.onclick = function () {
@@ -293,17 +300,6 @@
         var currentCount = listEl ? listEl.children.length : 0;
         fetchTrains(currentCount + 5, { append: true });
       };
-    }
-    var countNote = el("count-note");
-    if (countNote) {
-      var totalShown = list ? list.children.length : trains.length;
-      if (trains.length < limit) {
-        countNote.textContent = "Showing " + totalShown + " train" + (totalShown !== 1 ? "s" : "") + " (all predictions available for this stop right now).";
-        countNote.style.display = "";
-      } else {
-        countNote.textContent = "";
-        countNote.style.display = "none";
-      }
     }
     show(el("results"), true);
     saveDefault();
@@ -403,6 +399,26 @@
   if (toSel) toSel.addEventListener("change", function () {
     if (el("station") && el("station").value) fetchTrains();
   });
+
+  function updateApiStatus() {
+    var dot = document.querySelector(".api-status-dot");
+    var text = document.querySelector(".api-status-text");
+    fetch("/api/health")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var ok = data["511_api"] === "healthy";
+        if (dot) {
+          dot.className = "api-status-dot " + (ok ? "api-status-ok" : "api-status-down");
+        }
+        if (text) text.textContent = ok ? "511 API healthy" : "511 API unreachable";
+      })
+      .catch(function () {
+        if (dot) dot.className = "api-status-dot api-status-down";
+        if (text) text.textContent = "511 API unreachable";
+      });
+  }
+  updateApiStatus();
+  setInterval(updateApiStatus, 60000);
 
   loadStations()
     .then(function (names) {

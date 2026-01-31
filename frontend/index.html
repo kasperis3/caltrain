@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Next CalTrain?</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%23F7B500' stroke='%231a1a1a' stroke-width='1.5' d='M16 2L30 16 16 30 2 16Z'/%3E%3Cpath fill='none' stroke='%231a1a1a' stroke-width='2.5' stroke-linecap='round' d='M8 8L24 24M24 8L8 24'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="css/style.css?v=11" />
+    <link rel="stylesheet" href="css/style.css?v=13" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -69,8 +69,8 @@
             <span class="results-header__travel">Travel Time</span>
           </div>
           <ul id="train-list"></ul>
-          <p id="count-note" class="count-note" style="display: none"></p>
-          <p id="refreshed" class="refreshed"></p>
+          <p id="refreshed" class="results-meta"></p>
+          <p id="data-source" class="results-meta"></p>
           <button
             type="button"
             id="see-more"
@@ -84,11 +84,20 @@
     </main>
 
     <footer>
-      <p>
-        Uses 511 SF Bay API. Your station & direction are saved in this browser.
+      <p class="footer-line">
+        <span id="api-status" class="api-status" aria-label="511 API status" title="511 SF Bay API connection">
+          <span class="api-status-dot"></span>
+          <span class="api-status-text">511 API …</span>
+        </span>
+      </p>
+      <p class="footer-line">
+        Your station & direction are saved in this browser.
+      </p>
+      <p class="footer-line">
+        <a href="https://www.caltrain.com" target="_blank" rel="noopener noreferrer">Official Caltrain site</a>
       </p>
     </footer>
 
-    <script src="js/app.js?v=6"></script>
+    <script src="js/app.js?v=8"></script>
   </body>
 </html>

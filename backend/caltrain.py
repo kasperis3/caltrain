@@ -94,11 +94,27 @@ EMBEDDED_STOPS = [
 ]
 
 
-def _fetch_json(url, params):
+def _fetch_json(url, params, timeout=10):
     """GET url with params; handle 511 UTF-8 BOM and return JSON."""
-    r = requests.get(url, params=params)
+    r = requests.get(url, params=params, timeout=timeout)
     r.encoding = "utf-8-sig"
     return r.json()
+
+
+def check_511_api_health(operator_id=CALTRAIN_OPERATOR_ID, timeout=5):
+    """
+    Check if the 511 API is reachable and responsive.
+    Returns True if healthy, False otherwise.
+    """
+    try:
+        _fetch_json(
+            "https://api.511.org/transit/stops",
+            {"api_key": API_KEY, "operator_id": operator_id, "format": "json"},
+            timeout=timeout,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _utc_to_local(iso_utc_str):
@@ -235,8 +251,10 @@ def get_next_trains(stop_id, operator_id=CALTRAIN_OPERATOR_ID, limit=None):
     stop_str = str(stop_id)
 
     visits = _get_next_trains_from_gtfs_rt(stop_id, operator_id=operator_id, limit=None)
+    source = "gtfs_realtime" if visits else None
     if not visits:
         visits = _get_next_trains_from_stoptimetable(stop_id, operator_id=operator_id)
+        source = "stop_timetable" if visits else None
     if not visits:
         data = _fetch_json(
             "https://api.511.org/transit/StopMonitoring",
@@ -272,6 +290,8 @@ def get_next_trains(stop_id, operator_id=CALTRAIN_OPERATOR_ID, limit=None):
                 })
         except (KeyError, TypeError, AttributeError):
             pass
+        if visits:
+            source = "stop_monitoring"
 
     def _sort_key(v):
         t = v.get("expected_departure") or v.get("expected_arrival") or ""
@@ -281,7 +301,7 @@ def get_next_trains(stop_id, operator_id=CALTRAIN_OPERATOR_ID, limit=None):
 
     if limit is not None:
         visits = visits[:limit]
-    return visits
+    return visits, source or "none"
 
 
 # Southbound line order (San Francisco to Tamien/Gilroy) for dropdown ordering
@@ -640,7 +660,7 @@ def next_trains(stop_id_or_name, limit=5, direction=None, to_stop=None):
     if to_stop:
         to_id, _, _ = _resolve_stop(to_stop, direction=direction)
     travel_min = get_travel_minutes(stop_id, to_id) if to_id else None
-    raw = get_next_trains(stop_id, limit=limit)
+    raw, source = get_next_trains(stop_id, limit=limit)
     trains = []
     for t in raw:
         line_ref = t.get("line_ref") or ""
@@ -658,4 +678,4 @@ def next_trains(stop_id_or_name, limit=5, direction=None, to_stop=None):
         if travel_min is not None:
             train["travel_minutes"] = travel_min
         trains.append(train)
-    return {"stop_id": stop_id, "stop_name": stop_name, "trains": trains, "message": None}
+    return {"stop_id": stop_id, "stop_name": stop_name, "trains": trains, "message": None, "data_source": source}
