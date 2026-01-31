@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """
 Debug script to verify the 511 API and our parsing.
-Run from project root: python3 debug_api.py
+Run from project root: python3 scripts/debug_api.py
 
 Stops are now loaded from the GTFS feed (511 NeTEx /transit/stops no longer
-returns a list). This script still checks StopMonitoring and the final get_caltrain_stops().
+returns a list). This script checks StopMonitoring (with/without stopcode) and get_caltrain_stops().
 """
 
 import os
 import sys
-
-# Load .env from backend directory before importing caltrain
 from pathlib import Path
+
+# Add project root so backend can be imported (run from repo root: python3 scripts/debug_api.py)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Load .env from scripts/ or backend/
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env")
 
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:
@@ -115,7 +119,7 @@ else:
 # --- 2. Our get_caltrain_stops() (bypass cache by calling internal fetch) ---
 print("\n--- Our get_caltrain_stops() ---")
 # Clear cache so we hit API
-import caltrain
+from backend import caltrain
 caltrain._stops_cache = None
 caltrain._stops_cache_time = 0
 try:
@@ -136,25 +140,108 @@ print("\n--- Simulated /stops response (what frontend gets) ---")
 print(f"  JSON length: {len(str(stops))} chars")
 print(f"  First item: {stops[0] if stops else 'N/A'}")
 
-# --- 4. StopMonitoring (optional, one stop) ---
-print("\n--- 511 StopMonitoring API (one stop) ---")
+# --- 4. StopMonitoring (with stopcode, then without) ---
+print("\n--- 511 StopMonitoring API ---")
 stop_id = stops[0]["id"] if stops else "70031"
 url2 = "https://api.511.org/transit/StopMonitoring"
-params2 = {"api_key": API_KEY, "agency": "CT", "format": "json"}
+
+for label, params2 in [
+    ("WITH stopcode", {"api_key": API_KEY, "agency": "CT", "stopcode": stop_id, "format": "json"}),
+    ("WITHOUT stopcode", {"api_key": API_KEY, "agency": "CT", "format": "json"}),
+]:
+    print(f"\n  {label}:")
+    try:
+        r2 = requests.get(url2, params=params2)
+        r2.encoding = "utf-8-sig"
+        print(f"    Status: {r2.status_code}")
+        if r2.status_code == 200:
+            data2 = r2.json()
+            delivery = data2.get("ServiceDelivery", {})
+            sm = delivery.get("StopMonitoringDelivery", {})
+            visits = sm.get("MonitoredStopVisit", [])
+            if not visits and isinstance(sm.get("MonitoredStopVisit"), dict):
+                visits = list(sm.get("MonitoredStopVisit", {}).values()) if sm.get("MonitoredStopVisit") else []
+            for_our_stop = [v for v in visits if v.get("MonitoringRef") == str(stop_id)] if isinstance(visits, list) else []
+            print(f"    Total visits: {len(visits) if isinstance(visits, list) else 'N/A'}, for stop {stop_id}: {len(for_our_stop)}")
+            if visits and isinstance(visits, list) and len(visits) > 0:
+                print(f"    First visit keys: {list(visits[0].keys())[:8]}")
+            elif not visits:
+                print(f"    Response top keys: {list(data2.keys())}")
+                if "ServiceDelivery" in data2:
+                    sd = data2["ServiceDelivery"]
+                    print(f"    ServiceDelivery keys: {list(sd.keys())}")
+        else:
+            print(f"    Body: {r2.text[:300]}")
+    except Exception as e:
+        print(f"    ERROR: {e}")
+
+# --- 5. GTFS-Realtime Trip Updates (raw) ---
+print("\n--- 511 GTFS-Realtime Trip Updates ---")
+stop_ids_seen = set()
 try:
-    r2 = requests.get(url2, params=params2)
-    r2.encoding = "utf-8-sig"
-    print(f"  Status: {r2.status_code}")
-    if r2.status_code == 200:
-        data2 = r2.json()
-        delivery = data2.get("ServiceDelivery", {})
-        sm = delivery.get("StopMonitoringDelivery", {})
-        visits = sm.get("MonitoredStopVisit", [])
-        for_our_stop = [v for v in visits if v.get("MonitoringRef") == str(stop_id)]
-        print(f"  Total visits in feed: {len(visits)}, for stop {stop_id}: {len(for_our_stop)}")
-    else:
-        print(f"  Body: {r2.text[:300]}")
+    from google.transit import gtfs_realtime_pb2
+    r3 = requests.get(
+        "https://api.511.org/transit/tripupdates",
+        params={"api_key": API_KEY, "agency": "CT"},
+        timeout=10,
+    )
+    print(f"  Status: {r3.status_code}, size: {len(r3.content)} bytes")
+    if r3.status_code == 200 and r3.content:
+        feed = gtfs_realtime_pb2.FeedMessage()
+        feed.ParseFromString(r3.content)
+        entities_with_tu = sum(1 for e in feed.entity if e.HasField("trip_update"))
+        stop_ids_seen = set()
+        for e in feed.entity:
+            if e.HasField("trip_update"):
+                for stu in e.trip_update.stop_time_update:
+                    stop_ids_seen.add(stu.stop_id)
+        print(f"  Entities with trip_update: {entities_with_tu}")
+        print(f"  Unique stop_ids in feed: {len(stop_ids_seen)}")
+        sample = list(stop_ids_seen)[:5] if stop_ids_seen else []
+        print(f"  Sample stop_ids: {sample}")
+        print(f"  Our stop {stop_id} in feed: {stop_id in stop_ids_seen}")
 except Exception as e:
     print(f"  ERROR: {e}")
+    import traceback
+    traceback.print_exc()
+
+# --- 5b. SIRI Stop Timetable (scheduled departures fallback) ---
+print("\n--- 511 Stop Timetable (scheduled departures) ---")
+try:
+    r4 = requests.get(
+        "https://api.511.org/transit/stoptimetable",
+        params={"api_key": API_KEY, "operatorref": "CT", "monitoringref": stop_id, "format": "json"},
+        timeout=10,
+    )
+    r4.encoding = "utf-8-sig"
+    print(f"  Status: {r4.status_code}")
+    if r4.status_code == 200:
+        data4 = r4.json()
+        sd = data4.get("Siri", {}).get("ServiceDelivery", {})
+        stt = sd.get("StopTimetableDelivery", {})
+        visits4 = stt.get("TimetabledStopVisit", [])
+        if isinstance(visits4, dict):
+            visits4 = list(visits4.values())
+        print(f"  TimetabledStopVisit count: {len(visits4) if isinstance(visits4, list) else 'N/A'}")
+        if visits4 and isinstance(visits4, list):
+            print(f"  First visit keys: {list(visits4[0].keys())[:8]}")
+except Exception as e:
+    print(f"  ERROR: {e}")
+
+# --- 6. get_next_trains (GTFS-Realtime primary, SIRI fallback) ---
+print("\n--- get_next_trains (GTFS-Realtime + SIRI fallback) ---")
+test_stops = [stop_id]
+if stop_ids_seen and stop_id not in stop_ids_seen:
+    test_stops.append(list(stop_ids_seen)[0])
+for test_stop in test_stops:
+    try:
+        trains = caltrain.get_next_trains(test_stop, limit=5)
+        print(f"  Stop {test_stop}: {len(trains)} train(s)")
+        for i, t in enumerate(trains[:3]):
+            print(f"    {i+1}. {t.get('line_ref', '?')} -> {t.get('destination', '?')} @ {t.get('expected_departure_local', '?')}")
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        import traceback
+        traceback.print_exc()
 
 print("\n--- Done. If you see stops above, the API and parsing are OK. ---")
