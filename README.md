@@ -71,6 +71,8 @@ The backend reads `API_KEY` from root `.env` (via `env_file` in docker-compose).
    ```
 4. Visit `https://your-domain.com`.
 
+**Automatic config:** nginx auto-generates the HTTPS config from the template when certs exist, so `git pull` + `docker compose up` keeps HTTPS working without manual steps.
+
 ### Request logging
 
 nginx logs requests to stdout. View logs with:
