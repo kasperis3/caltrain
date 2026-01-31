@@ -21,6 +21,9 @@ app = FastAPI(
     title="Caltrain API",
     description="Next train departures, stops, and trip times for Caltrain. Uses 511 SF Bay Open Data.",
     version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
 
 # Serve frontend at / for local dev (frontend/ is sibling of backend/)

@@ -90,10 +90,10 @@ Log format: `$remote_addr - [$time_local] "$request" $status ... rt=$request_tim
 
 With the app running, FastAPI's interactive docs are available at:
 
-- **Swagger UI:** `/docs` — try endpoints in the browser
-- **ReDoc:** `/redoc` — alternative docs view
+- **Swagger UI:** `/api/docs` — try endpoints in the browser
+- **ReDoc:** `/api/redoc` — alternative docs view
 
-(e.g. https://nextcaltrain.live/docs)
+(e.g. https://nextcaltrain.live/api/docs)
 
 ## API base path
 
