@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from caltrain import get_next_trains, get_caltrain_stops, next_trains
 
@@ -23,6 +23,17 @@ if static_dir.exists():
     @app.get("/")
     def index():
         return FileResponse(static_dir / "index.html")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon():
+        """Serve railroad favicon so browser tab shows icon."""
+        path = static_dir / "favicon.svg"
+        if path.exists():
+            return Response(
+                content=path.read_bytes(),
+                media_type="image/svg+xml",
+            )
+        return Response(status_code=204)
 
 
 @app.get("/stops")
