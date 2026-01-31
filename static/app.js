@@ -1,5 +1,7 @@
 (function () {
   var STORAGE_KEY = "caltrain_default";
+  var TRAINS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  var trainsCache = {};
 
   function el(id) {
     return document.getElementById(id);
@@ -47,6 +49,12 @@
     }
   }
 
+  var NORTH_TERMINUS = "San Francisco";
+  var SOUTH_TERMINI = ["Tamien", "Gilroy"];
+
+  var DIR_COLOR_NORTH = "#1565c0";
+  var DIR_COLOR_SOUTH = "#e65100";
+
   function setDirection(value) {
     var hidden = el("direction");
     if (hidden) hidden.value = value;
@@ -55,6 +63,46 @@
       btn.textContent = value === "southbound" ? "↓" : "↑";
       btn.title = value === "southbound" ? "Southbound" : "Northbound";
       btn.setAttribute("aria-label", "Direction: " + (value === "southbound" ? "Southbound" : "Northbound"));
+      btn.classList.remove("direction-northbound", "direction-southbound");
+      btn.classList.add(value === "southbound" ? "direction-southbound" : "direction-northbound");
+      btn.style.color = value === "southbound" ? DIR_COLOR_SOUTH : DIR_COLOR_NORTH;
+    }
+  }
+
+  function isNorthTerminus(name) {
+    return (name || "").trim().toLowerCase() === NORTH_TERMINUS.toLowerCase();
+  }
+  function isSouthTerminus(name) {
+    var n = (name || "").trim().toLowerCase();
+    for (var i = 0; i < SOUTH_TERMINI.length; i++) {
+      if (SOUTH_TERMINI[i].toLowerCase() === n) return true;
+    }
+    return false;
+  }
+
+  function updateDirectionForStation(stationName) {
+    if (!stationName) return;
+    var btn = el("direction-btn");
+    if (isNorthTerminus(stationName)) {
+      setDirection("southbound");
+      if (btn) {
+        btn.classList.add("disabled");
+        btn.setAttribute("aria-disabled", "true");
+        btn.disabled = true;
+      }
+    } else if (isSouthTerminus(stationName)) {
+      setDirection("northbound");
+      if (btn) {
+        btn.classList.add("disabled");
+        btn.setAttribute("aria-disabled", "true");
+        btn.disabled = true;
+      }
+    } else {
+      if (btn) {
+        btn.classList.remove("disabled");
+        btn.removeAttribute("aria-disabled");
+        btn.disabled = false;
+      }
     }
   }
 
@@ -72,7 +120,10 @@
           }
         }
       }
-      if (data.direction === "northbound" || data.direction === "southbound") {
+      var station = el("station") && el("station").value;
+      updateDirectionForStation(station);
+      var btn = el("direction-btn");
+      if (station && btn && !btn.disabled && (data.direction === "northbound" || data.direction === "southbound")) {
         setDirection(data.direction);
       }
     } catch (e) {}
@@ -114,6 +165,75 @@
     return li;
   }
 
+  function trainsCacheKey(station, direction, limit) {
+    return station + "|" + (direction || "") + "|" + limit;
+  }
+
+  function getCachedTrains(station, direction, limit) {
+    var key = trainsCacheKey(station, direction, limit);
+    var entry = trainsCache[key];
+    if (!entry || Date.now() - entry.cachedAt > TRAINS_CACHE_TTL_MS) return null;
+    return entry.data;
+  }
+
+  function setCachedTrains(station, direction, limit, data) {
+    var key = trainsCacheKey(station, direction, limit);
+    trainsCache[key] = { data: data, cachedAt: Date.now() };
+  }
+
+  function applyTrainResults(data, appendOnly, limit) {
+    if (data.message) {
+      el("message").textContent = data.message;
+      show(el("message"), true);
+      return;
+    }
+    if (!data.stop_id) {
+      el("error").textContent = data.message || "Station not found.";
+      show(el("error"), true);
+      return;
+    }
+    var refreshed = el("refreshed");
+    var list = el("train-list");
+    var seeMore = el("see-more");
+    var trains = data.trains || [];
+
+    if (appendOnly && list) {
+      var currentCount = list.children.length;
+      var newTrains = trains.slice(currentCount);
+      for (var i = 0; i < newTrains.length; i++) {
+        list.appendChild(createTrainLi(newTrains[i]));
+      }
+    } else if (list) {
+      list.innerHTML = "";
+      for (var i = 0; i < trains.length; i++) {
+        list.appendChild(createTrainLi(trains[i]));
+      }
+    }
+
+    if (refreshed) refreshed.textContent = refreshedNow();
+    if (seeMore) {
+      seeMore.style.display = trains.length >= limit ? "" : "none";
+      seeMore.onclick = function () {
+        var listEl = el("train-list");
+        var currentCount = listEl ? listEl.children.length : 0;
+        fetchTrains(currentCount + 5, { append: true });
+      };
+    }
+    var countNote = el("count-note");
+    if (countNote) {
+      var totalShown = list ? list.children.length : trains.length;
+      if (trains.length < limit) {
+        countNote.textContent = "Showing " + totalShown + " train" + (totalShown !== 1 ? "s" : "") + " (all predictions available for this stop right now).";
+        countNote.style.display = "";
+      } else {
+        countNote.textContent = "";
+        countNote.style.display = "none";
+      }
+    }
+    show(el("results"), true);
+    saveDefault();
+  }
+
   function fetchTrains(limitOverride, opts) {
     opts = opts || {};
     var appendOnly = opts.append === true;
@@ -133,6 +253,11 @@
       show(el("error"), false);
       show(el("message"), false);
       show(el("results"), false);
+      var cached = getCachedTrains(station, direction, limit);
+      if (cached) {
+        applyTrainResults(cached, false, limit);
+        return;
+      }
       show(el("loading"), true);
     }
 
@@ -143,56 +268,8 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!appendOnly) show(el("loading"), false);
-        if (data.message) {
-          el("message").textContent = data.message;
-          show(el("message"), true);
-          return;
-        }
-        if (!data.stop_id) {
-          el("error").textContent = data.message || "Station not found.";
-          show(el("error"), true);
-          return;
-        }
-        var refreshed = el("refreshed");
-        var list = el("train-list");
-        var seeMore = el("see-more");
-        var trains = data.trains || [];
-
-        if (appendOnly && list) {
-          var currentCount = list.children.length;
-          var newTrains = trains.slice(currentCount);
-          for (var i = 0; i < newTrains.length; i++) {
-            list.appendChild(createTrainLi(newTrains[i]));
-          }
-        } else if (list) {
-          list.innerHTML = "";
-          for (var i = 0; i < trains.length; i++) {
-            list.appendChild(createTrainLi(trains[i]));
-          }
-        }
-
-        if (refreshed) refreshed.textContent = refreshedNow();
-        if (seeMore) {
-          seeMore.style.display = trains.length >= limit ? "" : "none";
-          seeMore.onclick = function () {
-            var listEl = el("train-list");
-            var currentCount = listEl ? listEl.children.length : 0;
-            fetchTrains(currentCount + 5, { append: true });
-          };
-        }
-        var countNote = el("count-note");
-        if (countNote) {
-          var totalShown = list ? list.children.length : trains.length;
-          if (trains.length < limit) {
-            countNote.textContent = "Showing " + totalShown + " train" + (totalShown !== 1 ? "s" : "") + " (all predictions available for this stop right now).";
-            countNote.style.display = "";
-          } else {
-            countNote.textContent = "";
-            countNote.style.display = "none";
-          }
-        }
-        show(el("results"), true);
-        saveDefault();
+        setCachedTrains(station, direction, limit, data);
+        applyTrainResults(data, appendOnly, limit);
       })
       .catch(function (err) {
         show(el("loading"), false);
@@ -208,6 +285,7 @@
 
   function onStationDirectionOrLimitChange() {
     var station = el("station") && el("station").value;
+    updateDirectionForStation(station);
     if (station) fetchTrains();
   }
 
@@ -217,6 +295,7 @@
     var dirBtn = el("direction-btn");
     if (dirBtn) {
       dirBtn.addEventListener("click", function () {
+        if (dirBtn.disabled) return;
         var next = el("direction").value === "northbound" ? "southbound" : "northbound";
         setDirection(next);
         if (el("station") && el("station").value) fetchTrains();
@@ -229,6 +308,8 @@
       populateStationSelect(names);
       loadDefault();
       var station = el("station") && el("station").value;
+      updateDirectionForStation(station);
+      setDirection(el("direction") && el("direction").value || "northbound");
       if (station) fetchTrains();
     })
     .catch(function () {

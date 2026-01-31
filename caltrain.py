@@ -5,8 +5,11 @@ Use get_caltrain_stops() to get stop IDs, then get_next_trains(stop_id) for pred
 All times are also returned in Pacific (PST/PDT) as *_local fields.
 """
 
+import csv
+import io
 import os
 import time
+import zipfile
 
 import requests
 from dotenv import load_dotenv
@@ -19,10 +22,65 @@ API_KEY = os.getenv("API_KEY")
 CALTRAIN_OPERATOR_ID = "CT"
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
-# Cache stops list (rarely changes); TTL 15 minutes
+# Cache stops list (rarely changes); TTL 24 hours
 _stops_cache = None
 _stops_cache_time = 0
-STOPS_CACHE_TTL_SEC = 900
+STOPS_CACHE_TTL_SEC = 86400
+
+# Last-resort embedded list if both GTFS and NeTEx fail (e.g. API change or outage).
+# Main Caltrain stations; IDs from GTFS. Update occasionally if new stations added.
+EMBEDDED_STOPS = [
+    {"id": "70011", "Name": "San Francisco Caltrain Station Northbound"},
+    {"id": "70012", "Name": "San Francisco Caltrain Station Southbound"},
+    {"id": "70021", "Name": "22nd Street Caltrain Station Northbound"},
+    {"id": "70022", "Name": "22nd Street Caltrain Station Southbound"},
+    {"id": "70031", "Name": "Bayshore Caltrain Station Northbound"},
+    {"id": "70032", "Name": "Bayshore Caltrain Station Southbound"},
+    {"id": "70041", "Name": "South San Francisco Caltrain Station Northbound"},
+    {"id": "70042", "Name": "South San Francisco Caltrain Station Southbound"},
+    {"id": "70051", "Name": "San Bruno Caltrain Station Northbound"},
+    {"id": "70052", "Name": "San Bruno Caltrain Station Southbound"},
+    {"id": "70061", "Name": "Millbrae Caltrain Station Northbound"},
+    {"id": "70062", "Name": "Millbrae Caltrain Station Southbound"},
+    {"id": "70071", "Name": "Broadway Caltrain Station Northbound"},
+    {"id": "70072", "Name": "Broadway Caltrain Station Southbound"},
+    {"id": "70081", "Name": "Burlingame Caltrain Station Northbound"},
+    {"id": "70082", "Name": "Burlingame Caltrain Station Southbound"},
+    {"id": "70091", "Name": "San Mateo Caltrain Station Northbound"},
+    {"id": "70092", "Name": "San Mateo Caltrain Station Southbound"},
+    {"id": "70101", "Name": "Hayward Park Caltrain Station Northbound"},
+    {"id": "70102", "Name": "Hayward Park Caltrain Station Southbound"},
+    {"id": "70111", "Name": "Hillsdale Caltrain Station Northbound"},
+    {"id": "70112", "Name": "Hillsdale Caltrain Station Southbound"},
+    {"id": "70121", "Name": "Belmont Caltrain Station Northbound"},
+    {"id": "70122", "Name": "Belmont Caltrain Station Southbound"},
+    {"id": "70131", "Name": "San Carlos Caltrain Station Northbound"},
+    {"id": "70132", "Name": "San Carlos Caltrain Station Southbound"},
+    {"id": "70141", "Name": "Redwood City Caltrain Station Northbound"},
+    {"id": "70142", "Name": "Redwood City Caltrain Station Southbound"},
+    {"id": "70151", "Name": "Menlo Park Caltrain Station Northbound"},
+    {"id": "70152", "Name": "Menlo Park Caltrain Station Southbound"},
+    {"id": "70161", "Name": "Palo Alto Caltrain Station Northbound"},
+    {"id": "70162", "Name": "Palo Alto Caltrain Station Southbound"},
+    {"id": "70171", "Name": "California Avenue Caltrain Station Northbound"},
+    {"id": "70172", "Name": "California Avenue Caltrain Station Southbound"},
+    {"id": "70181", "Name": "San Antonio Caltrain Station Northbound"},
+    {"id": "70182", "Name": "San Antonio Caltrain Station Southbound"},
+    {"id": "70191", "Name": "Mountain View Caltrain Station Northbound"},
+    {"id": "70192", "Name": "Mountain View Caltrain Station Southbound"},
+    {"id": "70201", "Name": "Sunnyvale Caltrain Station Northbound"},
+    {"id": "70202", "Name": "Sunnyvale Caltrain Station Southbound"},
+    {"id": "70211", "Name": "Lawrence Caltrain Station Northbound"},
+    {"id": "70212", "Name": "Lawrence Caltrain Station Southbound"},
+    {"id": "70221", "Name": "Santa Clara Caltrain Station Northbound"},
+    {"id": "70222", "Name": "Santa Clara Caltrain Station Southbound"},
+    {"id": "70231", "Name": "College Park Caltrain Station Northbound"},
+    {"id": "70232", "Name": "College Park Caltrain Station Southbound"},
+    {"id": "70241", "Name": "San Jose Diridon Caltrain Station Northbound"},
+    {"id": "70242", "Name": "San Jose Diridon Caltrain Station Southbound"},
+    {"id": "70251", "Name": "Tamien Caltrain Station Northbound"},
+    {"id": "70252", "Name": "Tamien Caltrain Station Southbound"},
+]
 
 
 def _fetch_json(url, params):
@@ -130,29 +188,100 @@ def _station_sort_key(stop):
         return len(STATION_LINE_ORDER)
 
 
-def get_caltrain_stops(operator_id=CALTRAIN_OPERATOR_ID):
+def _fetch_stops_from_gtfs(operator_id=CALTRAIN_OPERATOR_ID):
     """
-    List of Caltrain stops (id + name) in line order. Use id with get_next_trains().
-    Cached 15 minutes to avoid repeated 511 API calls when resolving station names.
+    Fetch stop list from 511 GTFS feed (stops.txt). Primary source for stops.
     """
-    global _stops_cache, _stops_cache_time
-    now = time.time()
-    if _stops_cache is not None and (now - _stops_cache_time) < STOPS_CACHE_TTL_SEC:
-        return _stops_cache
+    r = requests.get(
+        "https://api.511.org/transit/datafeeds",
+        params={"api_key": API_KEY, "operator_id": operator_id},
+    )
+    r.raise_for_status()
+    r.encoding = "utf-8-sig"
+    stops = []
+    with zipfile.ZipFile(io.BytesIO(r.content), "r") as zf:
+        # Accept stops.txt or Stops.txt (case may change)
+        stop_file = next((n for n in zf.namelist() if n.lower() == "stops.txt"), None)
+        if not stop_file:
+            return stops
+        with zf.open(stop_file) as f:
+            reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))
+            for row in reader:
+                location_type = (row.get("location_type") or "").strip()
+                if location_type == "1":
+                    continue
+                stop_id = (row.get("stop_id") or "").strip()
+                stop_name = (row.get("stop_name") or "").strip()
+                if stop_id and stop_name:
+                    stops.append({"id": stop_id, "Name": stop_name})
+    return stops
+
+
+def _fetch_stops_from_netex(operator_id=CALTRAIN_OPERATOR_ID):
+    """
+    Try 511 NeTEx /transit/stops API. Fallback if GTFS fails or format changes.
+    Handles both legacy (ScheduledStopPoint list) and other list shapes.
+    """
     data = _fetch_json(
         "https://api.511.org/transit/stops",
         {"api_key": API_KEY, "operator_id": operator_id, "format": "json"},
     )
     objs = data.get("Contents", {}).get("dataObjects", {})
     if isinstance(objs, dict):
-        points = objs.get("ScheduledStopPoint", [])
+        points = objs.get("ScheduledStopPoint") or objs.get("ScheduledStopPoints") or []
     elif isinstance(objs, list):
-        points = objs if objs else []
+        points = objs
     else:
         points = []
-    stops = [{"id": pt.get("id"), "Name": pt.get("Name")} for pt in points if isinstance(pt, dict)]
+    return [{"id": pt.get("id"), "Name": pt.get("Name")} for pt in points if isinstance(pt, dict) and (pt.get("id") or pt.get("Name"))]
+
+
+# Exclude these from the station dropdown (case-insensitive substring in stop name)
+STOP_NAME_EXCLUDES = ("elevator", "shuttle", "stanford")
+
+
+def _filter_stops_for_display(stops):
+    """Exclude elevator, shuttle, and Stanford stops from the list."""
     if not stops:
-        return _stops_cache if _stops_cache is not None else []
+        return stops
+    name_lower_keys = [k.lower() for k in STOP_NAME_EXCLUDES]
+    return [
+        s for s in stops
+        if not any(k in (s.get("Name") or "").lower() for k in name_lower_keys)
+    ]
+
+
+def get_caltrain_stops(operator_id=CALTRAIN_OPERATOR_ID):
+    """
+    List of Caltrain stops (id + name) in line order. Use id with get_next_trains().
+    Excludes elevator, shuttle, and Stanford stops. Future-proof: tries GTFS first,
+    then NeTEx, then cache, then embedded list. Cached 24 hours.
+    """
+    global _stops_cache, _stops_cache_time
+    now = time.time()
+    if _stops_cache is not None and (now - _stops_cache_time) < STOPS_CACHE_TTL_SEC:
+        return _stops_cache
+
+    stops = []
+    # 1. Primary: GTFS feed (most reliable)
+    try:
+        stops = _fetch_stops_from_gtfs(operator_id=operator_id)
+    except Exception:
+        pass
+    # 2. Fallback: NeTEx /transit/stops (in case 511 restores or changes format)
+    if not stops:
+        try:
+            stops = _fetch_stops_from_netex(operator_id=operator_id)
+        except Exception:
+            pass
+    # 3. Use cache if we have it (e.g. API temporarily down)
+    if not stops and _stops_cache is not None:
+        return _stops_cache
+    # 4. Last resort: embedded list so dropdown is never empty
+    if not stops:
+        stops = list(EMBEDDED_STOPS)
+
+    stops = _filter_stops_for_display(stops)
     stops.sort(key=_station_sort_key)
     _stops_cache = stops
     _stops_cache_time = now
