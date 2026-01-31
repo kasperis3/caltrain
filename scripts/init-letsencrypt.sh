@@ -32,8 +32,8 @@ docker compose up -d backend nginx
 # 4. Wait for nginx to be ready
 sleep 3
 
-# 5. Get certificate
-docker compose run --rm certbot certonly \
+# 5. Get certificate (override entrypoint: certbot service normally runs "renew" loop)
+docker compose run --rm --entrypoint certbot certbot certonly \
   --webroot -w /var/www/certbot \
   -d "$DOMAIN" \
   --email "$EMAIL" \
