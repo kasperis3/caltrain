@@ -4,9 +4,10 @@ Caltrain next departures — pick From/To stations and direction, see trains and
 
 ## Project layout
 
-- **backend/** — FastAPI API only. All routes under `/api` (e.g. `/api/stops`, `/api/next_trains`). Credentials in `backend/.env` (copy `backend/.env.example` to `backend/.env` and add your 511 API key; if you had a root `.env`, move it to `backend/.env`).
+- **backend/** — FastAPI API only. All routes under `/api` (e.g. `/api/stops`, `/api/next_trains`). Credentials in `backend/.env` (local dev) or root `.env` (Docker).
 - **frontend/** — Static HTML/CSS/JS. Flat layout: `index.html`, `css/style.css`, `js/app.js`. Served by nginx (or any static server) in production.
-- **infra/** — (you add) Dockerfile, nginx config for hosting and deployment.
+- **nginx/** — nginx config for Docker (HTTP, HTTPS templates, Let's Encrypt).
+- **docs/** — Reference materials (e.g. 511 API spec).
 
 ## Run locally
 
@@ -52,13 +53,16 @@ python start.py [stop] [direction]
 ### Docker (nginx + backend)
 
 ```bash
+cp .env.example .env   # add API_KEY, and DOMAIN/EMAIL for HTTPS
 docker compose up -d
 # App at http://localhost
 ```
 
+The backend reads `API_KEY` from root `.env` (via `env_file` in docker-compose).
+
 ### Domain + HTTPS (production)
 
-1. Copy `.env.example` to `.env` and set `DOMAIN` and `EMAIL`.
+1. Copy `.env.example` to `.env` and set `DOMAIN`, `EMAIL`, and `API_KEY`.
 2. Point your domain's DNS A record to this server.
 3. Run the one-time setup:
    ```bash
@@ -80,7 +84,16 @@ Log format: `$remote_addr - [$time_local] "$request" $status ... rt=$request_tim
 ### Other platforms
 
 - **Backend:** Use the `Procfile` (e.g. Render, Railway): `cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT`. Set `API_KEY` in the host’s environment (or use `backend/.env` where supported).
-- **Frontend:** Serve the `frontend/` directory and proxy `/api` to your backend URL. Add `infra/` with Dockerfile and nginx config as needed.
+- **Frontend:** Serve the `frontend/` directory and proxy `/api` to your backend URL.
+
+## API docs
+
+With the app running, FastAPI's interactive docs are available at:
+
+- **Swagger UI:** `/docs` — try endpoints in the browser
+- **ReDoc:** `/redoc` — alternative docs view
+
+(e.g. https://nextcaltrain.live/docs)
 
 ## API base path
 

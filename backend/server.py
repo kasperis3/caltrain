@@ -17,7 +17,11 @@ try:
 except ModuleNotFoundError:
     from caltrain import get_next_trains, get_caltrain_stops, get_stops_in_direction, next_trains
 
-app = FastAPI(title="Caltrain API")
+app = FastAPI(
+    title="Caltrain API",
+    description="Next train departures, stops, and trip times for Caltrain. Uses 511 SF Bay Open Data.",
+    version="1.0.0",
+)
 
 # Serve frontend at / for local dev (frontend/ is sibling of backend/)
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
