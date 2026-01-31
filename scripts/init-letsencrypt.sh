@@ -26,8 +26,9 @@ envsubst '${DOMAIN}' < nginx/nginx-http-only.conf.template > nginx/nginx.conf
 # 2. Ensure certbot webroot exists
 mkdir -p certbot
 
-# 3. Start nginx and backend
-docker compose up -d backend nginx
+# 3. Start/restart nginx so it loads the HTTP-only config (with acme-challenge location)
+docker compose up -d backend
+docker compose up -d --force-recreate nginx
 
 # 4. Wait for nginx to be ready
 sleep 3
