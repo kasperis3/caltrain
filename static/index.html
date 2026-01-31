@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>When Train?</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header>
+      <h1>When Train?</h1>
+    </header>
+
+    <main>
+      <form id="form" class="selector">
+        <div class="station-row">
+          <div class="field station-field">
+            <select id="station" name="station" required aria-label="Station">
+              <option value="">Loading stations…</option>
+            </select>
+          </div>
+          <input
+            type="hidden"
+            id="direction"
+            name="direction"
+            value="northbound"
+          />
+          <button
+            type="button"
+            id="direction-btn"
+            class="direction-btn"
+            title="Northbound"
+            aria-label="Direction: Northbound"
+          >
+            ↑
+          </button>
+        </div>
+      </form>
+
+      <p id="message" class="message" style="display: none"></p>
+      <p id="error" class="error" style="display: none"></p>
+      <div id="loading" class="loading" style="display: none">Loading…</div>
+
+      <section id="results" class="results" style="display: none">
+        <p id="count-note" class="count-note" style="display: none"></p>
+        <ul id="train-list"></ul>
+        <p id="refreshed" class="refreshed"></p>
+        <button
+          type="button"
+          id="see-more"
+          class="see-more"
+          style="display: none"
+        >
+          See more trains
+        </button>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        Uses 511 SF Bay API. Your station & direction are saved in this browser.
+      </p>
+    </footer>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,16 +1,27 @@
 """
-Run the Caltrain example: next trains at a stop.
+Next 5 trains at a stop (by ID or name). Use direction when a name has two platforms.
 
-Usage: python start.py
+Usage: python start.py [stop] [direction]
+  e.g. python start.py 70031
+       python start.py Belmont
+       python start.py "San Francisco" southbound
 """
 
-from caltrain import get_next_trains
+import sys
+from caltrain import next_trains
 
 if __name__ == "__main__":
-    stop_id = "70031"  # Bayshore Northbound; use get_caltrain_stops() to find others
-    trains = get_next_trains(stop_id, limit=5)
+    stop_input = (sys.argv[1] if len(sys.argv) > 1 else "").strip() or "70031"
+    direction = (sys.argv[2] if len(sys.argv) > 2 else "").strip() or None
+    result = next_trains(stop_input, limit=5, direction=direction)
+    if not result["stop_id"]:
+        if result.get("message"):
+            print(result["message"])
+        else:
+            print(f"Stop not found: {stop_input!r}")
+        sys.exit(1)
 
-    print(f"Next trains at stop {stop_id}:", len(trains))
-    for t in trains:
-        dep = t.get("expected_departure_local") or t.get("expected_arrival_local")
-        print(" ", t.get("line_name") or t.get("destination"), "->", dep)
+    label = result["stop_name"] or result["stop_id"]
+    print(f"Next {len(result['trains'])} trains at {label}:")
+    for t in result["trains"]:
+        print(f"  {t['destination']} — {t['time']}")
