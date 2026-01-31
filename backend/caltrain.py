@@ -244,6 +244,64 @@ def _get_next_trains_from_stoptimetable(stop_id, operator_id=CALTRAIN_OPERATOR_I
     return visits
 
 
+def _get_next_trains_from_stopmonitoring(stop_id, operator_id=CALTRAIN_OPERATOR_ID, limit=None):
+    """
+    Live predictions from SIRI StopMonitoring (fallback when GTFS-RT and Stop Timetable are empty).
+    Returns list of dicts in same format as get_next_trains.
+    """
+    stop_str = str(stop_id)
+    visits = []
+    try:
+        data = _fetch_json(
+            "https://api.511.org/transit/StopMonitoring",
+            {"api_key": API_KEY, "agency": operator_id, "stopcode": stop_str, "format": "json"},
+        )
+        delivery = data.get("ServiceDelivery", {})
+        sm = delivery.get("StopMonitoringDelivery", {})
+        raw = sm.get("MonitoredStopVisit", [])
+        if isinstance(raw, dict):
+            raw = list(raw.values()) if raw else []
+        raw = [v for v in raw if v.get("MonitoringRef") == stop_str]
+        for v in raw:
+            journey = v.get("MonitoredVehicleJourney", {})
+            call = journey.get("MonitoredCall", {})
+            line = (journey.get("PublishedLineName") or "").strip()
+            line_ref = (journey.get("LineRef") or "").strip()
+            dest = (journey.get("DestinationName") or "").strip()
+            exp_dep = call.get("ExpectedDepartureTime")
+            exp_arr = call.get("ExpectedArrivalTime")
+            aimed_dep = call.get("AimedDepartureTime")
+            aimed_arr = call.get("AimedArrivalTime")
+            visits.append({
+                "line_name": line,
+                "line_ref": line_ref,
+                "destination": dest,
+                "expected_departure": exp_dep,
+                "expected_arrival": exp_arr,
+                "aimed_departure": aimed_dep,
+                "aimed_arrival": aimed_arr,
+                "expected_departure_local": _utc_to_local(exp_dep),
+                "expected_arrival_local": _utc_to_local(exp_arr),
+                "aimed_departure_local": _utc_to_local(aimed_dep),
+                "aimed_arrival_local": _utc_to_local(aimed_arr),
+            })
+    except (KeyError, TypeError, AttributeError, Exception):
+        pass
+    return visits
+
+
+def debug_data_sources(stop_id, operator_id=CALTRAIN_OPERATOR_ID):
+    """
+    For debugging: return parsed visits from each source separately.
+    Keys: priority_1_gtfs_realtime, priority_2_stop_timetable, priority_3_stop_monitoring
+    """
+    return {
+        "priority_1_gtfs_realtime": _get_next_trains_from_gtfs_rt(stop_id, operator_id=operator_id),
+        "priority_2_stop_timetable": _get_next_trains_from_stoptimetable(stop_id, operator_id=operator_id),
+        "priority_3_stop_monitoring": _get_next_trains_from_stopmonitoring(stop_id, operator_id=operator_id),
+    }
+
+
 def get_next_trains(stop_id, operator_id=CALTRAIN_OPERATOR_ID, limit=None):
     """
     Next train predictions at a stop (real-time from 511).
@@ -262,40 +320,7 @@ def get_next_trains(stop_id, operator_id=CALTRAIN_OPERATOR_ID, limit=None):
         visits = _get_next_trains_from_stoptimetable(stop_id, operator_id=operator_id)
         source = "stop_timetable" if visits else None
     if not visits:
-        data = _fetch_json(
-            "https://api.511.org/transit/StopMonitoring",
-            {"api_key": API_KEY, "agency": operator_id, "stopcode": stop_str, "format": "json"},
-        )
-        try:
-            delivery = data.get("ServiceDelivery", {})
-            sm = delivery.get("StopMonitoringDelivery", {})
-            raw = sm.get("MonitoredStopVisit", [])
-            raw = [v for v in raw if v.get("MonitoringRef") == stop_str]
-            for v in raw:
-                journey = v.get("MonitoredVehicleJourney", {})
-                call = journey.get("MonitoredCall", {})
-                line = (journey.get("PublishedLineName") or "").strip()
-                line_ref = (journey.get("LineRef") or "").strip()
-                dest = (journey.get("DestinationName") or "").strip()
-                exp_dep = call.get("ExpectedDepartureTime")
-                exp_arr = call.get("ExpectedArrivalTime")
-                aimed_dep = call.get("AimedDepartureTime")
-                aimed_arr = call.get("AimedArrivalTime")
-                visits.append({
-                    "line_name": line,
-                    "line_ref": line_ref,
-                    "destination": dest,
-                    "expected_departure": exp_dep,
-                    "expected_arrival": exp_arr,
-                    "aimed_departure": aimed_dep,
-                    "aimed_arrival": aimed_arr,
-                    "expected_departure_local": _utc_to_local(exp_dep),
-                    "expected_arrival_local": _utc_to_local(exp_arr),
-                    "aimed_departure_local": _utc_to_local(aimed_dep),
-                    "aimed_arrival_local": _utc_to_local(aimed_arr),
-                })
-        except (KeyError, TypeError, AttributeError):
-            pass
+        visits = _get_next_trains_from_stopmonitoring(stop_id, operator_id=operator_id)
         if visits:
             source = "stop_monitoring"
 

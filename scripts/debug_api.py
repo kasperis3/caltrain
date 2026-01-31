@@ -228,8 +228,33 @@ try:
 except Exception as e:
     print(f"  ERROR: {e}")
 
-# --- 6. get_next_trains (GTFS-Realtime primary, SIRI fallback) ---
-print("\n--- get_next_trains (GTFS-Realtime + SIRI fallback) ---")
+# --- 6. DATA SOURCE PRIORITY (each source's response for our stop) ---
+print("\n" + "=" * 60)
+print("DATA SOURCE PRIORITY ORDER")
+print("=" * 60)
+print("""
+  Priority 1: gtfs_realtime    - GTFS-Realtime Trip Updates (real-time)
+  Priority 2: stop_timetable   - SIRI Stop Timetable (scheduled)
+  Priority 3: stop_monitoring  - SIRI StopMonitoring (live when available)
+  First non-empty source wins. UI shows: Real-time / Scheduled / Live
+""")
+sources = caltrain.debug_data_sources(stop_id)
+winner = None
+for key, visits in sources.items():
+    label = key.replace("priority_1_", "1. ").replace("priority_2_", "2. ").replace("priority_3_", "3. ")
+    n = len(visits) if visits else 0
+    status = f"{n} visit(s)" if n else "empty"
+    if n and winner is None:
+        winner = key.split("_", 2)[-1]  # gtfs_realtime, stop_timetable, or stop_monitoring
+    print(f"  {label}: {status}")
+    if visits and len(visits) > 0:
+        for i, v in enumerate(visits[:2]):
+            print(f"      {i+1}. {v.get('line_ref', '?')} -> {v.get('destination', '?')} @ {v.get('expected_departure_local', '?')}")
+print(f"\n  >>> WINNER (source used): {winner or 'none'}")
+print("=" * 60)
+
+# --- 7. get_next_trains (final result) ---
+print("\n--- get_next_trains (final combined result) ---")
 test_stops = [stop_id]
 if stop_ids_seen and stop_id not in stop_ids_seen:
     test_stops.append(list(stop_ids_seen)[0])
