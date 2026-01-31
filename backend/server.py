@@ -16,16 +16,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 try:
     from backend.caltrain import (
         check_511_api_health,
-        get_next_trains,
         get_caltrain_stops,
+        get_nearest_station,
+        get_next_trains,
         get_stops_in_direction,
         next_trains,
     )
 except ModuleNotFoundError:
     from caltrain import (
         check_511_api_health,
-        get_next_trains,
         get_caltrain_stops,
+        get_nearest_station,
+        get_next_trains,
         get_stops_in_direction,
         next_trains,
     )
@@ -77,6 +79,22 @@ def health():
     """Check if the 511 API is reachable and healthy."""
     ok = check_511_api_health()
     return {"status": "ok" if ok else "degraded", "511_api": "healthy" if ok else "unreachable"}
+
+
+@api_router.get("/nearest_station")
+def nearest_station(
+    lat: str = Query(..., description="Latitude"),
+    lon: str = Query(..., description="Longitude"),
+    max_miles: float = Query(10, ge=0.1, le=50),
+):
+    """Find the closest Caltrain station to (lat, lon). Returns station + direction + stop_id or null if none within max_miles."""
+    try:
+        lat_f = float(lat.replace(",", "."))
+        lon_f = float(lon.replace(",", "."))
+    except (ValueError, TypeError):
+        return {"station": None, "direction": None, "stop_id": None}
+    result = get_nearest_station(lat_f, lon_f, max_miles=max_miles)
+    return result or {"station": None, "direction": None, "stop_id": None}
 
 
 @api_router.get("/stops")

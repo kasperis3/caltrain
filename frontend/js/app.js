@@ -11,6 +11,12 @@
     if (el) el.style.display = on ? "" : "none";
   }
 
+  function safeJson(r, fallback) {
+    return r.text().then(function (text) {
+      try { return JSON.parse(text); } catch (e) { return fallback !== undefined ? fallback : null; }
+    });
+  }
+
   function displayNameFromStop(s) {
     return (s.Name || s.name || "").replace(/\s+Caltrain Station (Northbound|Southbound)$/i, "").trim();
   }
@@ -19,7 +25,7 @@
     return fetch("/api/stops")
       .then(function (r) {
         if (!r.ok) throw new Error("Stations failed");
-        return r.json();
+        return safeJson(r, []);
       })
       .then(function (stops) {
         var list = Array.isArray(stops) ? stops : [];
@@ -40,7 +46,7 @@
     if (!fromStation || !direction) return Promise.resolve([]);
     var params = "from=" + encodeURIComponent(fromStation) + "&direction=" + encodeURIComponent(direction);
     return fetch("/api/stops_in_direction?" + params)
-      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (r) { return r.ok ? safeJson(r, []) : []; })
       .then(function (stops) {
         var list = Array.isArray(stops) ? stops : [];
         var names = [];
@@ -333,12 +339,14 @@
       show(el("loading"), true);
     }
 
-    var params = "stop=" + encodeURIComponent(station) + "&limit=" + limit;
+    var stopIdOverride = el("stop-id-override") && el("stop-id-override").value;
+    var stopParam = stopIdOverride || station;
+    var params = "stop=" + encodeURIComponent(stopParam) + "&limit=" + limit;
     if (direction) params += "&direction=" + encodeURIComponent(direction);
     if (toStation) params += "&to=" + encodeURIComponent(toStation);
 
     fetch("/api/next_trains?" + params)
-      .then(function (r) { return r.json(); })
+      .then(function (r) { return safeJson(r, {}); })
       .then(function (data) {
         if (!appendOnly) show(el("loading"), false);
         setCachedTrains(station, direction, limit, toStation, data);
@@ -357,6 +365,8 @@
   });
 
   function onStationDirectionOrLimitChange() {
+    var override = el("stop-id-override");
+    if (override) override.value = "";
     var station = el("station") && el("station").value;
     updateDirectionForStation(station);
     var direction = el("direction") && el("direction").value;
@@ -380,6 +390,8 @@
     if (dirBtn) {
       dirBtn.addEventListener("click", function () {
         if (dirBtn.disabled) return;
+        var override = el("stop-id-override");
+        if (override) override.value = "";
         var next = el("direction").value === "northbound" ? "southbound" : "northbound";
         setDirection(next);
         var station = el("station") && el("station").value;
@@ -400,11 +412,89 @@
     if (el("station") && el("station").value) fetchTrains();
   });
 
+  var useLocationBtn = el("use-location-btn");
+  if (useLocationBtn) {
+    useLocationBtn.addEventListener("click", function () {
+      if (!navigator.geolocation) {
+        show(el("message"), true);
+        el("message").textContent = "Geolocation not supported. Please pick a station.";
+        return;
+      }
+      useLocationBtn.disabled = true;
+      show(el("error"), false);
+      show(el("message"), true);
+      el("message").textContent = "Getting location…";
+      navigator.geolocation.getCurrentPosition(
+        function (pos) {
+          var lat = Number(pos.coords.latitude).toFixed(6);
+          var lon = Number(pos.coords.longitude).toFixed(6);
+          var params = "lat=" + encodeURIComponent(lat) + "&lon=" + encodeURIComponent(lon) + "&max_miles=10";
+          fetch("/api/nearest_station?" + params)
+            .then(function (r) { return safeJson(r, { station: null, direction: null, stop_id: null }); })
+            .then(function (data) {
+              useLocationBtn.disabled = false;
+              var station = data.station;
+              if (!station) {
+                el("message").textContent = "No station within 10 miles. Please pick a station.";
+                show(el("message"), true);
+                return;
+              }
+              show(el("message"), false);
+              var override = el("stop-id-override");
+              if (override && data.stop_id) override.value = data.stop_id;
+              var stationSel = el("station");
+              if (stationSel) {
+                var found = false;
+                for (var i = 0; i < stationSel.options.length; i++) {
+                  if (stationSel.options[i].value === station) {
+                    stationSel.selectedIndex = i;
+                    found = true;
+                    break;
+                  }
+                }
+                if (!found) {
+                  var opt = document.createElement("option");
+                  opt.value = station;
+                  opt.textContent = station;
+                  stationSel.appendChild(opt);
+                  stationSel.selectedIndex = stationSel.options.length - 1;
+                }
+              }
+              var direction = data.direction;
+              if (direction) setDirection(direction);
+              updateDirectionForStation(station);
+              var dir = el("direction") && el("direction").value;
+              if (station && dir) {
+                loadStopsInDirection(station, dir).then(function (names) {
+                  populateToSelect(names);
+                  var toS = el("to-station");
+                  if (toS) toS.selectedIndex = 0;
+                  fetchTrains();
+                });
+              } else if (station) {
+                fetchTrains();
+              }
+            })
+            .catch(function () {
+              useLocationBtn.disabled = false;
+              el("message").textContent = "Could not find nearest station. Please pick a station.";
+              show(el("message"), true);
+            });
+        },
+        function () {
+          useLocationBtn.disabled = false;
+          el("message").textContent = "Could not get location. Please pick a station.";
+          show(el("message"), true);
+        }
+      );
+    });
+  }
+
   function updateApiStatus() {
     var dot = document.querySelector(".api-status-dot");
     var text = document.querySelector(".api-status-text");
     fetch("/api/health")
-      .then(function (r) { return r.json(); })
+      .then(function (r) { return safeJson(r, {}); })
       .then(function (data) {
         var ok = data["511_api"] === "healthy";
         if (dot) {
@@ -420,21 +510,85 @@
   updateApiStatus();
   setInterval(updateApiStatus, 60000);
 
+  function finishInitWithStation(station, skipLoadDefault) {
+    if (!skipLoadDefault) {
+      var override = el("stop-id-override");
+      if (override) override.value = "";
+      loadDefault();
+    }
+    station = station || (el("station") && el("station").value);
+    updateDirectionForStation(station);
+    var direction = el("direction") && el("direction").value || "northbound";
+    setDirection(direction);
+    if (station && direction) {
+      loadStopsInDirection(station, direction).then(function (toNames) {
+        populateToSelect(toNames);
+        if (!skipLoadDefault) loadDefault();
+        else { var toS = el("to-station"); if (toS) toS.selectedIndex = 0; }
+        if (station) fetchTrains();
+      });
+    } else if (station) {
+      fetchTrains();
+    }
+  }
+
+  function tryLocationOnLoad() {
+    if (!navigator.geolocation) {
+      finishInitWithStation(null, false);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        var lat = Number(pos.coords.latitude).toFixed(6);
+        var lon = Number(pos.coords.longitude).toFixed(6);
+        var params = "lat=" + encodeURIComponent(lat) + "&lon=" + encodeURIComponent(lon) + "&max_miles=10";
+        fetch("/api/nearest_station?" + params)
+          .then(function (r) { return safeJson(r, { station: null, direction: null, stop_id: null }); })
+          .then(function (data) {
+            var station = data.station;
+            if (!station) {
+              finishInitWithStation(null, false);
+              return;
+            }
+            var override = el("stop-id-override");
+            if (override && data.stop_id) override.value = data.stop_id;
+            var stationSel = el("station");
+            if (!stationSel) return;
+            var found = false;
+            for (var i = 0; i < stationSel.options.length; i++) {
+              if (stationSel.options[i].value === station) {
+                stationSel.selectedIndex = i;
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              var opt = document.createElement("option");
+              opt.value = station;
+              opt.textContent = station;
+              stationSel.appendChild(opt);
+              stationSel.selectedIndex = stationSel.options.length - 1;
+            }
+            var direction = data.direction;
+            if (direction) setDirection(direction);
+            finishInitWithStation(station, true);
+          })
+          .catch(function () {
+            finishInitWithStation(null, false);
+          });
+      },
+      function () {
+        finishInitWithStation(null, false);
+      },
+      { timeout: 5000, maximumAge: 0 }
+    );
+  }
+
   loadStations()
     .then(function (names) {
       populateStationSelect(names);
       loadDefault();
-      var station = el("station") && el("station").value;
-      updateDirectionForStation(station);
-      var direction = el("direction") && el("direction").value || "northbound";
-      setDirection(direction);
-      if (station && direction) {
-        loadStopsInDirection(station, direction).then(function (toNames) {
-          populateToSelect(toNames);
-          loadDefault();
-          if (station) fetchTrains();
-        });
-      } else if (station) fetchTrains();
+      tryLocationOnLoad();
     })
     .catch(function () {
       var sel = el("station");

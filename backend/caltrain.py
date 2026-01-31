@@ -10,7 +10,9 @@ Fallback: SIRI StopMonitoring.
 
 import csv
 import io
+import math
 import os
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -32,6 +34,10 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 _stops_cache = None
 _stops_cache_time = 0
 STOPS_CACHE_TTL_SEC = 86400
+
+# Cache stops with coordinates for nearest-station lookup
+_stops_coords_cache = None
+_stops_coords_cache_time = 0
 
 # Cache travel-time matrix from GTFS stop_times; TTL 24 hours
 _travel_time_cache = None
@@ -465,9 +471,10 @@ def get_travel_minutes(from_stop_id, to_stop_id, operator_id=CALTRAIN_OPERATOR_I
     return _travel_time_cache.get((str(from_stop_id), str(to_stop_id)))
 
 
-def _fetch_stops_from_gtfs(operator_id=CALTRAIN_OPERATOR_ID):
+def _fetch_stops_from_gtfs(operator_id=CALTRAIN_OPERATOR_ID, include_coords=False):
     """
     Fetch stop list from 511 GTFS feed (stops.txt). Primary source for stops.
+    If include_coords=True, adds lat/lon when available (for nearest-station lookup).
     """
     r = requests.get(
         "https://api.511.org/transit/datafeeds",
@@ -477,7 +484,6 @@ def _fetch_stops_from_gtfs(operator_id=CALTRAIN_OPERATOR_ID):
     r.encoding = "utf-8-sig"
     stops = []
     with zipfile.ZipFile(io.BytesIO(r.content), "r") as zf:
-        # Accept stops.txt or Stops.txt (case may change)
         stop_file = next((n for n in zf.namelist() if n.lower() == "stops.txt"), None)
         if not stop_file:
             return stops
@@ -490,7 +496,16 @@ def _fetch_stops_from_gtfs(operator_id=CALTRAIN_OPERATOR_ID):
                 stop_id = (row.get("stop_id") or "").strip()
                 stop_name = (row.get("stop_name") or "").strip()
                 if stop_id and stop_name:
-                    stops.append({"id": stop_id, "Name": stop_name})
+                    s = {"id": stop_id, "Name": stop_name}
+                    if include_coords:
+                        try:
+                            lat = float((row.get("stop_lat") or "").strip())
+                            lon = float((row.get("stop_lon") or "").strip())
+                            s["lat"] = lat
+                            s["lon"] = lon
+                        except (ValueError, TypeError):
+                            pass
+                    stops.append(s)
     return stops
 
 
@@ -563,6 +578,75 @@ def get_caltrain_stops(operator_id=CALTRAIN_OPERATOR_ID):
     _stops_cache = stops
     _stops_cache_time = now
     return stops
+
+
+def _haversine_miles(lat1, lon1, lat2, lon2):
+    """Distance in miles between two (lat, lon) points."""
+    R = 3959  # Earth radius in miles
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+def get_caltrain_stops_with_coords(operator_id=CALTRAIN_OPERATOR_ID):
+    """Stops with lat/lon from GTFS (for nearest-station lookup). Cached 24 hours."""
+    global _stops_coords_cache, _stops_coords_cache_time
+    now = time.time()
+    if _stops_coords_cache is not None and (now - _stops_coords_cache_time) < STOPS_CACHE_TTL_SEC:
+        return _stops_coords_cache
+    stops = []
+    try:
+        stops = _fetch_stops_from_gtfs(operator_id=operator_id, include_coords=True)
+    except Exception:
+        pass
+    stops = [s for s in stops if "lat" in s and "lon" in s]
+    stops = _filter_stops_for_display(stops)
+    _stops_coords_cache = stops
+    _stops_coords_cache_time = now
+    return stops
+
+
+def _display_name_from_stop(stop):
+    """Strip 'Caltrain Station Northbound/Southbound' for display name."""
+    name = (stop.get("Name") or "").strip()
+    return re.sub(r"\s+Caltrain Station (Northbound|Southbound)$", "", name, flags=re.I).strip()
+
+
+def get_nearest_station(lat, lon, max_miles=10, operator_id=CALTRAIN_OPERATOR_ID):
+    """
+    Find the closest Caltrain station to (lat, lon).
+    Returns {"station": display_name, "direction": "northbound"|"southbound"|None} or None if none within max_miles.
+    """
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return None
+    stops = get_caltrain_stops_with_coords(operator_id=operator_id)
+    if not stops:
+        return None
+    best = None
+    best_mi = float("inf")
+    for s in stops:
+        d = _haversine_miles(lat_f, lon_f, s["lat"], s["lon"])
+        if d <= max_miles and d < best_mi:
+            best_mi = d
+            direction = None
+            name = s.get("Name") or ""
+            if "Northbound" in name:
+                direction = "northbound"
+            elif "Southbound" in name:
+                direction = "southbound"
+            best = {
+                "station": _display_name_from_stop(s),
+                "direction": direction,
+                "stop_id": s.get("id"),
+            }
+    return best
 
 
 def _normalize_direction(direction):
