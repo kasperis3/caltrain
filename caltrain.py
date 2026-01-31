@@ -6,6 +6,7 @@ All times are also returned in Pacific (PST/PDT) as *_local fields.
 """
 
 import os
+import time
 
 import requests
 from dotenv import load_dotenv
@@ -17,6 +18,11 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 CALTRAIN_OPERATOR_ID = "CT"
 PACIFIC = ZoneInfo("America/Los_Angeles")
+
+# Cache stops list (rarely changes); TTL 15 minutes
+_stops_cache = None
+_stops_cache_time = 0
+STOPS_CACHE_TTL_SEC = 900
 
 
 def _fetch_json(url, params):
@@ -127,15 +133,29 @@ def _station_sort_key(stop):
 def get_caltrain_stops(operator_id=CALTRAIN_OPERATOR_ID):
     """
     List of Caltrain stops (id + name) in line order. Use id with get_next_trains().
+    Cached 15 minutes to avoid repeated 511 API calls when resolving station names.
     """
+    global _stops_cache, _stops_cache_time
+    now = time.time()
+    if _stops_cache is not None and (now - _stops_cache_time) < STOPS_CACHE_TTL_SEC:
+        return _stops_cache
     data = _fetch_json(
         "https://api.511.org/transit/stops",
         {"api_key": API_KEY, "operator_id": operator_id, "format": "json"},
     )
     objs = data.get("Contents", {}).get("dataObjects", {})
-    points = objs.get("ScheduledStopPoint", []) if isinstance(objs, dict) else []
+    if isinstance(objs, dict):
+        points = objs.get("ScheduledStopPoint", [])
+    elif isinstance(objs, list):
+        points = objs if objs else []
+    else:
+        points = []
     stops = [{"id": pt.get("id"), "Name": pt.get("Name")} for pt in points if isinstance(pt, dict)]
+    if not stops:
+        return _stops_cache if _stops_cache is not None else []
     stops.sort(key=_station_sort_key)
+    _stops_cache = stops
+    _stops_cache_time = now
     return stops
 
 
