@@ -486,9 +486,17 @@
               show(el("message"), true);
             });
         },
-        function () {
+        function (err) {
           useLocationBtn.disabled = false;
-          el("message").textContent = "Could not get location. Please pick a station.";
+          var msg = "Could not get location. Please pick a station.";
+          if (err && err.code === 1) {
+            msg = "Location permission was denied. You can enable it in your browser\u2019s settings for this site.";
+          } else if (err && err.code === 3) {
+            msg = "Location request timed out. Please try again or pick a station.";
+          } else if (err && err.code === 2) {
+            msg = "Location unavailable. Please pick a station.";
+          }
+          el("message").textContent = msg;
           show(el("message"), true);
         }
       );
