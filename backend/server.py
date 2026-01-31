@@ -36,6 +36,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
         return response
 
 
@@ -47,6 +48,10 @@ if _frontend_dir.exists():
     @app.get("/")
     def index():
         return FileResponse(_frontend_dir / "index.html")
+
+    @app.get("/favicon.svg")
+    def favicon():
+        return FileResponse(_frontend_dir / "favicon.svg", media_type="image/svg+xml")
 
     app.mount("/css", StaticFiles(directory=_frontend_dir / "css"), name="css")
     app.mount("/js", StaticFiles(directory=_frontend_dir / "js"), name="js")
