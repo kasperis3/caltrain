@@ -11,6 +11,43 @@
     if (el) el.style.display = on ? "" : "none";
   }
 
+  function selectOrAddStation(stationSel, station) {
+    if (!stationSel || !station) return;
+    for (var i = 0; i < stationSel.options.length; i++) {
+      if (stationSel.options[i].value === station) {
+        stationSel.selectedIndex = i;
+        return;
+      }
+    }
+    var opt = document.createElement("option");
+    opt.value = station;
+    opt.textContent = station;
+    stationSel.appendChild(opt);
+    stationSel.selectedIndex = stationSel.options.length - 1;
+  }
+
+  function applyNearestStation(data) {
+    var station = data.station;
+    if (!station) return false;
+    var override = el("stop-id-override");
+    if (override && data.stop_id) override.value = data.stop_id;
+    selectOrAddStation(el("station"), station);
+    if (data.direction) setDirection(data.direction);
+    updateDirectionForStation(station);
+    var dir = el("direction") && el("direction").value;
+    if (station && dir) {
+      loadStopsInDirection(station, dir).then(function (names) {
+        populateToSelect(names);
+        var toS = el("to-station");
+        if (toS) toS.selectedIndex = 0;
+        fetchTrains();
+      });
+    } else if (station) {
+      fetchTrains();
+    }
+    return true;
+  }
+
   function safeJson(r, fallback) {
     return r.text().then(function (text) {
       try { return JSON.parse(text); } catch (e) { return fallback !== undefined ? fallback : null; }
@@ -364,9 +401,13 @@
     fetchTrains();
   });
 
+  function clearStopIdOverride() {
+    var o = el("stop-id-override");
+    if (o) o.value = "";
+  }
+
   function onStationDirectionOrLimitChange() {
-    var override = el("stop-id-override");
-    if (override) override.value = "";
+    clearStopIdOverride();
     var station = el("station") && el("station").value;
     updateDirectionForStation(station);
     var direction = el("direction") && el("direction").value;
@@ -390,8 +431,7 @@
     if (dirBtn) {
       dirBtn.addEventListener("click", function () {
         if (dirBtn.disabled) return;
-        var override = el("stop-id-override");
-        if (override) override.value = "";
+        clearStopIdOverride();
         var next = el("direction").value === "northbound" ? "southbound" : "northbound";
         setDirection(next);
         var station = el("station") && el("station").value;
@@ -433,46 +473,11 @@
             .then(function (r) { return safeJson(r, { station: null, direction: null, stop_id: null }); })
             .then(function (data) {
               useLocationBtn.disabled = false;
-              var station = data.station;
-              if (!station) {
+              if (applyNearestStation(data)) {
+                show(el("message"), false);
+              } else {
                 el("message").textContent = "No station within 10 miles. Please pick a station.";
                 show(el("message"), true);
-                return;
-              }
-              show(el("message"), false);
-              var override = el("stop-id-override");
-              if (override && data.stop_id) override.value = data.stop_id;
-              var stationSel = el("station");
-              if (stationSel) {
-                var found = false;
-                for (var i = 0; i < stationSel.options.length; i++) {
-                  if (stationSel.options[i].value === station) {
-                    stationSel.selectedIndex = i;
-                    found = true;
-                    break;
-                  }
-                }
-                if (!found) {
-                  var opt = document.createElement("option");
-                  opt.value = station;
-                  opt.textContent = station;
-                  stationSel.appendChild(opt);
-                  stationSel.selectedIndex = stationSel.options.length - 1;
-                }
-              }
-              var direction = data.direction;
-              if (direction) setDirection(direction);
-              updateDirectionForStation(station);
-              var dir = el("direction") && el("direction").value;
-              if (station && dir) {
-                loadStopsInDirection(station, dir).then(function (names) {
-                  populateToSelect(names);
-                  var toS = el("to-station");
-                  if (toS) toS.selectedIndex = 0;
-                  fetchTrains();
-                });
-              } else if (station) {
-                fetchTrains();
               }
             })
             .catch(function () {
@@ -512,8 +517,7 @@
 
   function finishInitWithStation(station, skipLoadDefault) {
     if (!skipLoadDefault) {
-      var override = el("stop-id-override");
-      if (override) override.value = "";
+      clearStopIdOverride();
       loadDefault();
     }
     station = station || (el("station") && el("station").value);
@@ -545,33 +549,7 @@
         fetch("/api/nearest_station?" + params)
           .then(function (r) { return safeJson(r, { station: null, direction: null, stop_id: null }); })
           .then(function (data) {
-            var station = data.station;
-            if (!station) {
-              finishInitWithStation(null, false);
-              return;
-            }
-            var override = el("stop-id-override");
-            if (override && data.stop_id) override.value = data.stop_id;
-            var stationSel = el("station");
-            if (!stationSel) return;
-            var found = false;
-            for (var i = 0; i < stationSel.options.length; i++) {
-              if (stationSel.options[i].value === station) {
-                stationSel.selectedIndex = i;
-                found = true;
-                break;
-              }
-            }
-            if (!found) {
-              var opt = document.createElement("option");
-              opt.value = station;
-              opt.textContent = station;
-              stationSel.appendChild(opt);
-              stationSel.selectedIndex = stationSel.options.length - 1;
-            }
-            var direction = data.direction;
-            if (direction) setDirection(direction);
-            finishInitWithStation(station, true);
+            if (!applyNearestStation(data)) finishInitWithStation(null, false);
           })
           .catch(function () {
             finishInitWithStation(null, false);
