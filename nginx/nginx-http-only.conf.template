@@ -14,6 +14,10 @@ server {
     access_log /dev/stdout detailed;
     error_log  /dev/stderr warn;
 
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
         try_files $uri =404;

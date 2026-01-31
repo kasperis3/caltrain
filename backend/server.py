@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Support both: run from repo root (uvicorn backend.server:app) and from app root (uvicorn server:app, e.g. Docker/Render)
 try:
@@ -25,6 +26,20 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses. Used when running Python-only (no nginx)."""
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Serve frontend at / for local dev (frontend/ is sibling of backend/)
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
