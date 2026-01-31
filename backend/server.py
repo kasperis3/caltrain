@@ -11,8 +11,11 @@ from fastapi import APIRouter, FastAPI, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# Use backend.caltrain so uvicorn can run from repo root: uvicorn backend.server:app
-from backend.caltrain import get_next_trains, get_caltrain_stops, get_stops_in_direction, next_trains
+# Support both: run from repo root (uvicorn backend.server:app) and from app root (uvicorn server:app, e.g. Docker/Render)
+try:
+    from backend.caltrain import get_next_trains, get_caltrain_stops, get_stops_in_direction, next_trains
+except ModuleNotFoundError:
+    from caltrain import get_next_trains, get_caltrain_stops, get_stops_in_direction, next_trains
 
 app = FastAPI(title="Caltrain API")
 
