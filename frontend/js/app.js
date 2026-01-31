@@ -11,8 +11,12 @@
     if (el) el.style.display = on ? "" : "none";
   }
 
+  function displayNameFromStop(s) {
+    return (s.Name || s.name || "").replace(/\s+Caltrain Station (Northbound|Southbound)$/i, "").trim();
+  }
+
   function loadStations() {
-    return fetch("/stops")
+    return fetch("/api/stops")
       .then(function (r) {
         if (!r.ok) throw new Error("Stations failed");
         return r.json();
@@ -22,8 +26,7 @@
         var seen = {};
         var names = [];
         for (var i = 0; i < list.length; i++) {
-          var s = list[i];
-          var name = (s.Name || s.name || "").replace(/\s+Caltrain Station (Northbound|Southbound)$/i, "");
+          var name = displayNameFromStop(list[i]);
           if (name && !seen[name]) {
             seen[name] = true;
             names.push(name);
@@ -31,6 +34,39 @@
         }
         return names;
       });
+  }
+
+  function loadStopsInDirection(fromStation, direction) {
+    if (!fromStation || !direction) return Promise.resolve([]);
+    var params = "from=" + encodeURIComponent(fromStation) + "&direction=" + encodeURIComponent(direction);
+    return fetch("/api/stops_in_direction?" + params)
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (stops) {
+        var list = Array.isArray(stops) ? stops : [];
+        var names = [];
+        for (var i = 0; i < list.length; i++) {
+          var name = displayNameFromStop(list[i]);
+          if (name) names.push(name);
+        }
+        return names;
+      })
+      .catch(function () { return []; });
+  }
+
+  function populateToSelect(names) {
+    var sel = el("to-station");
+    if (!sel) return;
+    sel.innerHTML = "";
+    var optAny = document.createElement("option");
+    optAny.value = "";
+    optAny.textContent = "Any";
+    sel.appendChild(optAny);
+    for (var i = 0; i < (names || []).length; i++) {
+      var opt = document.createElement("option");
+      opt.value = names[i];
+      opt.textContent = names[i];
+      sel.appendChild(opt);
+    }
   }
 
   function populateStationSelect(names) {
@@ -126,18 +162,30 @@
       if (station && btn && !btn.disabled && (data.direction === "northbound" || data.direction === "southbound")) {
         setDirection(data.direction);
       }
+      var toSel = el("to-station");
+      if (toSel && data.to_station) {
+        for (var j = 0; j < toSel.options.length; j++) {
+          if (toSel.options[j].value === data.to_station) {
+            toSel.selectedIndex = j;
+            break;
+          }
+        }
+      }
     } catch (e) {}
   }
 
   function saveDefault() {
     var station = el("station");
     var direction = el("direction");
+    var toStation = el("to-station");
     if (!station || !station.value) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      var saved = {
         station: station.value,
         direction: direction ? direction.value : "northbound"
-      }));
+      };
+      if (toStation && toStation.value) saved.to_station = toStation.value;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     } catch (e) {}
   }
 
@@ -148,7 +196,10 @@
     return "Last refreshed: " + date + " " + time;
   }
 
-  function createTrainLi(t) {
+  function createTrainLi(t, opts) {
+    opts = opts || {};
+    var isFirstRow = opts.isFirstRow === true;
+    var hasToStation = opts.hasToStation === true;
     var li = document.createElement("li");
     var tag = document.createElement("span");
     var slug = (t.service || "other").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
@@ -159,25 +210,37 @@
     timeEl.className = "time";
     var minUntil = t.minutes_until;
     if (minUntil != null && minUntil >= 0 && minUntil <= 10) timeEl.classList.add("time-soon");
-    timeEl.textContent = t.time || "—";
+    var timeStr = (t.time || "—").replace(/\s+(PST|PDT)$/i, "");
+    timeEl.textContent = timeStr;
+    var travelEl = document.createElement("span");
+    travelEl.className = "travel-minutes";
+    if (t.travel_minutes != null && t.travel_minutes >= 0) {
+      travelEl.textContent = t.travel_minutes + " min";
+    } else if (isFirstRow && !hasToStation) {
+      travelEl.textContent = "pick a To station above";
+      travelEl.classList.add("travel-minutes--hint");
+    } else {
+      travelEl.classList.add("travel-minutes--placeholder");
+    }
     li.appendChild(tag);
     li.appendChild(timeEl);
+    li.appendChild(travelEl);
     return li;
   }
 
-  function trainsCacheKey(station, direction, limit) {
-    return station + "|" + (direction || "") + "|" + limit;
+  function trainsCacheKey(station, direction, limit, toStation) {
+    return station + "|" + (direction || "") + "|" + limit + "|" + (toStation || "");
   }
 
-  function getCachedTrains(station, direction, limit) {
-    var key = trainsCacheKey(station, direction, limit);
+  function getCachedTrains(station, direction, limit, toStation) {
+    var key = trainsCacheKey(station, direction, limit, toStation);
     var entry = trainsCache[key];
     if (!entry || Date.now() - entry.cachedAt > TRAINS_CACHE_TTL_MS) return null;
     return entry.data;
   }
 
-  function setCachedTrains(station, direction, limit, data) {
-    var key = trainsCacheKey(station, direction, limit);
+  function setCachedTrains(station, direction, limit, toStation, data) {
+    var key = trainsCacheKey(station, direction, limit, toStation);
     trainsCache[key] = { data: data, cachedAt: Date.now() };
   }
 
@@ -197,19 +260,31 @@
     var seeMore = el("see-more");
     var trains = data.trains || [];
 
+    var toStation = el("to-station") && el("to-station").value;
+    var hasToStation = !!toStation;
     if (appendOnly && list) {
       var currentCount = list.children.length;
       var newTrains = trains.slice(currentCount);
       for (var i = 0; i < newTrains.length; i++) {
-        list.appendChild(createTrainLi(newTrains[i]));
+        list.appendChild(createTrainLi(newTrains[i], { hasToStation: hasToStation }));
       }
     } else if (list) {
       list.innerHTML = "";
       for (var i = 0; i < trains.length; i++) {
-        list.appendChild(createTrainLi(trains[i]));
+        list.appendChild(createTrainLi(trains[i], { isFirstRow: i === 0, hasToStation: hasToStation }));
       }
     }
 
+    var headerTime = el("results-header-time");
+    if (headerTime) {
+      var tz = "";
+      try {
+        var parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", timeZoneName: "short" }).formatToParts(new Date());
+        var tzPart = parts.find(function (p) { return p.type === "timeZoneName"; });
+        if (tzPart) tz = " (" + tzPart.value + ")";
+      } catch (e) {}
+      headerTime.textContent = "Departure Time" + tz;
+    }
     if (refreshed) refreshed.textContent = refreshedNow();
     if (seeMore) {
       seeMore.style.display = trains.length >= limit ? "" : "none";
@@ -239,6 +314,7 @@
     var appendOnly = opts.append === true;
     var station = el("station") && el("station").value;
     var direction = el("direction") && el("direction").value;
+    var toStation = el("to-station") && el("to-station").value;
     var limit = limitOverride != null ? limitOverride : 5;
 
     if (!station) {
@@ -253,7 +329,7 @@
       show(el("error"), false);
       show(el("message"), false);
       show(el("results"), false);
-      var cached = getCachedTrains(station, direction, limit);
+      var cached = getCachedTrains(station, direction, limit, toStation);
       if (cached) {
         applyTrainResults(cached, false, limit);
         return;
@@ -263,12 +339,13 @@
 
     var params = "stop=" + encodeURIComponent(station) + "&limit=" + limit;
     if (direction) params += "&direction=" + encodeURIComponent(direction);
+    if (toStation) params += "&to=" + encodeURIComponent(toStation);
 
-    fetch("/next_trains?" + params)
+    fetch("/api/next_trains?" + params)
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!appendOnly) show(el("loading"), false);
-        setCachedTrains(station, direction, limit, data);
+        setCachedTrains(station, direction, limit, toStation, data);
         applyTrainResults(data, appendOnly, limit);
       })
       .catch(function (err) {
@@ -286,7 +363,18 @@
   function onStationDirectionOrLimitChange() {
     var station = el("station") && el("station").value;
     updateDirectionForStation(station);
-    if (station) fetchTrains();
+    var direction = el("direction") && el("direction").value;
+    if (station && direction) {
+      loadStopsInDirection(station, direction).then(function (names) {
+        populateToSelect(names);
+        var toSel = el("to-station");
+        if (toSel) toSel.selectedIndex = 0;
+        fetchTrains();
+      });
+    } else {
+      populateToSelect([]);
+      if (station) fetchTrains();
+    }
   }
 
   var stationSel = el("station");
@@ -298,10 +386,23 @@
         if (dirBtn.disabled) return;
         var next = el("direction").value === "northbound" ? "southbound" : "northbound";
         setDirection(next);
-        if (el("station") && el("station").value) fetchTrains();
+        var station = el("station") && el("station").value;
+        var direction = el("direction") && el("direction").value;
+        if (station && direction) {
+          loadStopsInDirection(station, direction).then(function (names) {
+            populateToSelect(names);
+            var toSel = el("to-station");
+            if (toSel) toSel.selectedIndex = 0;
+            fetchTrains();
+          });
+        } else if (station) fetchTrains();
       });
     }
   })();
+  var toSel = el("to-station");
+  if (toSel) toSel.addEventListener("change", function () {
+    if (el("station") && el("station").value) fetchTrains();
+  });
 
   loadStations()
     .then(function (names) {
@@ -309,8 +410,15 @@
       loadDefault();
       var station = el("station") && el("station").value;
       updateDirectionForStation(station);
-      setDirection(el("direction") && el("direction").value || "northbound");
-      if (station) fetchTrains();
+      var direction = el("direction") && el("direction").value || "northbound";
+      setDirection(direction);
+      if (station && direction) {
+        loadStopsInDirection(station, direction).then(function (toNames) {
+          populateToSelect(toNames);
+          loadDefault();
+          if (station) fetchTrains();
+        });
+      } else if (station) fetchTrains();
     })
     .catch(function () {
       var sel = el("station");

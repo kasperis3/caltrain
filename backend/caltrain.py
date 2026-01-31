@@ -10,13 +10,15 @@ import io
 import os
 import time
 import zipfile
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-load_dotenv()
+# Load .env from backend directory (API credentials)
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 API_KEY = os.getenv("API_KEY")
 CALTRAIN_OPERATOR_ID = "CT"
@@ -26,6 +28,11 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 _stops_cache = None
 _stops_cache_time = 0
 STOPS_CACHE_TTL_SEC = 86400
+
+# Cache travel-time matrix from GTFS stop_times; TTL 24 hours
+_travel_time_cache = None
+_travel_time_cache_time = 0
+TRAVEL_TIME_CACHE_TTL_SEC = 86400
 
 # Last-resort embedded list if both GTFS and NeTEx fail (e.g. API change or outage).
 # Main Caltrain stations; IDs from GTFS. Update occasionally if new stations added.
@@ -91,14 +98,14 @@ def _fetch_json(url, params):
 
 
 def _utc_to_local(iso_utc_str):
-    """Turn a UTC ISO time string into Pacific, e.g. '8:41 AM PST'."""
+    """Turn a UTC ISO time string into Pacific time only, e.g. '8:41 AM' (timezone shown in header)."""
     if not iso_utc_str:
         return None
     try:
         dt = datetime.fromisoformat(iso_utc_str.replace("Z", "+00:00"))
         local = dt.astimezone(PACIFIC)
         h = local.hour % 12 or 12
-        return f"{h}:{local.minute:02d} {local.strftime('%p %Z')}"
+        return f"{h}:{local.minute:02d} {local.strftime('%p')}"
     except (ValueError, TypeError):
         return None
 
@@ -181,11 +188,152 @@ STATION_LINE_ORDER = [
 
 def _station_sort_key(stop):
     """Order key for line order; stations not in list go at end."""
-    name = (stop.get("Name") or "").replace(" Caltrain Station Northbound", "").replace(" Caltrain Station Southbound", "").strip()
+    name = _stop_display_name(stop)
     try:
         return STATION_LINE_ORDER.index(name)
     except ValueError:
         return len(STATION_LINE_ORDER)
+
+
+def _stop_display_name(stop):
+    """Strip direction suffix for display (e.g. 'San Francisco')."""
+    name = (stop.get("Name") or "").replace(" Caltrain Station Northbound", "").replace(" Caltrain Station Southbound", "").strip()
+    return name
+
+
+def _stop_line_index(stop):
+    """Index of stop in STATION_LINE_ORDER; len(ORDER) if not found."""
+    name = _stop_display_name(stop)
+    try:
+        return STATION_LINE_ORDER.index(name)
+    except ValueError:
+        return len(STATION_LINE_ORDER)
+
+
+def get_stops_in_direction(from_station, direction, operator_id=CALTRAIN_OPERATOR_ID):
+    """
+    Stops that are in the given direction from from_station (same format as get_caltrain_stops).
+    from_station: station name or id. direction: 'northbound' or 'southbound'.
+    Returns list of {id, Name} in line order, excluding the from station itself.
+    """
+    from_id, from_name, msg = _resolve_stop(from_station, direction=direction)
+    if not from_id:
+        return []
+    stops = get_caltrain_stops(operator_id=operator_id)
+    from_idx = None
+    for st in stops:
+        if st.get("id") == from_id:
+            from_idx = _stop_line_index(st)
+            break
+    if from_idx is None:
+        return []
+    want_south = direction and "south" in direction.lower()
+    result = []
+    seen_display_name = set()
+    for st in stops:
+        idx = _stop_line_index(st)
+        if st.get("id") == from_id:
+            continue
+        if want_south and idx > from_idx:
+            name = _stop_display_name(st)
+            if name not in seen_display_name:
+                seen_display_name.add(name)
+                result.append(st)
+        elif not want_south and idx < from_idx:
+            name = _stop_display_name(st)
+            if name not in seen_display_name:
+                seen_display_name.add(name)
+                result.append(st)
+    return result
+
+
+def _gtfs_time_to_seconds(time_str):
+    """Convert GTFS time (HH:MM:SS or H:MM:SS, can be 25:00:00) to seconds since midnight."""
+    if not time_str:
+        return None
+    parts = (time_str or "").strip().split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+        return h * 3600 + m * 60 + s
+    except (ValueError, TypeError):
+        return None
+
+
+def _build_travel_time_cache(operator_id=CALTRAIN_OPERATOR_ID):
+    """Fetch GTFS, parse stop_times.txt, build (from_id, to_id) -> median minutes. Cached 24h."""
+    global _travel_time_cache, _travel_time_cache_time
+    now = time.time()
+    if _travel_time_cache is not None and (now - _travel_time_cache_time) < TRAVEL_TIME_CACHE_TTL_SEC:
+        return
+    try:
+        r = requests.get(
+            "https://api.511.org/transit/datafeeds",
+            params={"api_key": API_KEY, "operator_id": operator_id},
+        )
+        r.raise_for_status()
+        r.encoding = "utf-8-sig"
+    except Exception:
+        return
+    pairs_minutes = {}  # (from_id, to_id) -> list of minutes
+    with zipfile.ZipFile(io.BytesIO(r.content), "r") as zf:
+        stop_times_file = next((n for n in zf.namelist() if n.lower() == "stop_times.txt"), None)
+        if not stop_times_file:
+            return
+        with zf.open(stop_times_file) as f:
+            reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))
+            rows = [row for row in reader]
+    # Group by trip_id, sort by stop_sequence
+    by_trip = {}
+    for row in rows:
+        trip_id = (row.get("trip_id") or "").strip()
+        stop_id = (row.get("stop_id") or "").strip()
+        arr = _gtfs_time_to_seconds(row.get("arrival_time"))
+        dep = _gtfs_time_to_seconds(row.get("departure_time"))
+        seq = (row.get("stop_sequence") or "").strip()
+        try:
+            seq = int(seq)
+        except (ValueError, TypeError):
+            continue
+        if not trip_id or not stop_id or dep is None:
+            continue
+        by_trip.setdefault(trip_id, []).append((seq, stop_id, dep, arr))
+    for trip_id, stop_list in by_trip.items():
+        stop_list.sort(key=lambda x: x[0])
+        for i in range(len(stop_list)):
+            _, from_id, dep_i, _ = stop_list[i]
+            for j in range(i + 1, len(stop_list)):
+                _, to_id, dep_j, arr_j = stop_list[j]
+                to_time = arr_j if arr_j is not None else dep_j
+                if to_time is None:
+                    continue
+                minutes = (to_time - dep_i) // 60
+                if minutes >= 0:
+                    key = (from_id, to_id)
+                    pairs_minutes.setdefault(key, []).append(minutes)
+    # Median per pair
+    _travel_time_cache = {}
+    for (from_id, to_id), mins_list in pairs_minutes.items():
+        if mins_list:
+            mins_list.sort()
+            mid = len(mins_list) // 2
+            median = mins_list[mid] if len(mins_list) % 2 else (mins_list[mid - 1] + mins_list[mid]) // 2
+            _travel_time_cache[(from_id, to_id)] = median
+    _travel_time_cache_time = now
+
+
+def get_travel_minutes(from_stop_id, to_stop_id, operator_id=CALTRAIN_OPERATOR_ID):
+    """
+    Typical travel time in minutes from from_stop_id to to_stop_id (from GTFS stop_times).
+    Returns int or None if not available.
+    """
+    if not from_stop_id or not to_stop_id or from_stop_id == to_stop_id:
+        return None
+    _build_travel_time_cache(operator_id=operator_id)
+    if _travel_time_cache is None:
+        return None
+    return _travel_time_cache.get((str(from_stop_id), str(to_stop_id)))
 
 
 def _fetch_stops_from_gtfs(operator_id=CALTRAIN_OPERATOR_ID):
@@ -368,16 +516,21 @@ def _minutes_until(iso_utc_str):
         return None
 
 
-def next_trains(stop_id_or_name, limit=5, direction=None):
+def next_trains(stop_id_or_name, limit=5, direction=None, to_stop=None):
     """
     Next trains at a stop. Pass stop by ID (e.g. "70031") or name (e.g. "San Francisco").
     For names that match two platforms, pass direction: "northbound" or "southbound".
+    If to_stop (name or id) is given, each train includes travel_minutes from this stop to to_stop.
 
-    Returns dict: {"stop_id", "stop_name", "trains": [{"service", "destination", "time", "minutes_until"}, ...], "message"}.
+    Returns dict: {"stop_id", "stop_name", "trains": [{"service", "destination", "time", "minutes_until", "travel_minutes"?}, ...], "message"}.
     """
     stop_id, stop_name, message = _resolve_stop(stop_id_or_name, direction=direction)
     if not stop_id:
         return {"stop_id": None, "stop_name": None, "trains": [], "message": message}
+    to_id = None
+    if to_stop:
+        to_id, _, _ = _resolve_stop(to_stop, direction=direction)
+    travel_min = get_travel_minutes(stop_id, to_id) if to_id else None
     raw = get_next_trains(stop_id, limit=limit)
     trains = []
     for t in raw:
@@ -387,10 +540,13 @@ def next_trains(stop_id_or_name, limit=5, direction=None):
         exp_dep = t.get("expected_departure") or t.get("expected_arrival")
         time_str = t.get("expected_departure_local") or t.get("expected_arrival_local") or "—"
         minutes_until = _minutes_until(exp_dep) if exp_dep else None
-        trains.append({
+        train = {
             "service": service,
             "destination": dest,
             "time": time_str,
             "minutes_until": minutes_until,
-        })
+        }
+        if travel_min is not None:
+            train["travel_minutes"] = travel_min
+        trains.append(train)
     return {"stop_id": stop_id, "stop_name": stop_name, "trains": trains, "message": None}

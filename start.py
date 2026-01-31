@@ -8,7 +8,7 @@ Usage: python start.py [stop] [direction]
 """
 
 import sys
-from caltrain import next_trains
+from backend.caltrain import next_trains
 
 if __name__ == "__main__":
     stop_input = (sys.argv[1] if len(sys.argv) > 1 else "").strip() or "70031"

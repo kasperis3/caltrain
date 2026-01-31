@@ -10,9 +10,10 @@ returns a list). This script still checks StopMonitoring and the final get_caltr
 import os
 import sys
 
-# Load .env before importing caltrain
+# Load .env from backend directory before importing caltrain
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:
