@@ -1,5 +1,6 @@
 .env
 backend/.env
+certbot/
 __pycache__/
 */__pycache__/
 *.pyc

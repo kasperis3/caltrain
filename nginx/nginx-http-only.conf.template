@@ -1,4 +1,6 @@
-# Request logging format
+# Bootstrap config – HTTP only, for initial Let's Encrypt cert acquisition.
+# Used by init-letsencrypt.sh before HTTPS certs exist.
+
 log_format main '$remote_addr - $remote_user [$time_local] '
                 '"$request" $status $body_bytes_sent '
                 '"$http_referer" "$http_user_agent" '
@@ -6,9 +8,14 @@ log_format main '$remote_addr - $remote_user [$time_local] '
 
 server {
     listen 80;
-    server_name _;
+    server_name ${DOMAIN};
     access_log /dev/stdout main;
     error_log  /dev/stderr warn;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        try_files $uri =404;
+    }
 
     location /api/ {
         proxy_pass http://backend:8000;
@@ -22,4 +29,3 @@ server {
         try_files $uri $uri/ /index.html;
     }
 }
-

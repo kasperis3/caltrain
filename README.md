@@ -49,6 +49,36 @@ python start.py [stop] [direction]
 
 ## Deploy
 
+### Docker (nginx + backend)
+
+```bash
+docker compose up -d
+# App at http://localhost
+```
+
+### Domain + HTTPS (production)
+
+1. Copy `.env.example` to `.env` and set `DOMAIN` and `EMAIL`.
+2. Point your domain's DNS A record to this server.
+3. Run the one-time setup:
+   ```bash
+   chmod +x scripts/init-letsencrypt.sh
+   ./scripts/init-letsencrypt.sh
+   ```
+4. Visit `https://your-domain.com`.
+
+### Request logging
+
+nginx logs requests to stdout. View logs with:
+
+```bash
+docker compose logs -f nginx
+```
+
+Log format: `$remote_addr - [$time_local] "$request" $status ... rt=$request_time`.
+
+### Other platforms
+
 - **Backend:** Use the `Procfile` (e.g. Render, Railway): `cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT`. Set `API_KEY` in the host’s environment (or use `backend/.env` where supported).
 - **Frontend:** Serve the `frontend/` directory and proxy `/api` to your backend URL. Add `infra/` with Dockerfile and nginx config as needed.
 
