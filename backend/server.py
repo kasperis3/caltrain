@@ -17,6 +17,7 @@ try:
     from backend.caltrain import (
         check_511_api_health,
         get_caltrain_stops,
+        get_direction,
         get_nearest_station,
         get_next_trains,
         get_stops_in_direction,
@@ -26,6 +27,7 @@ except ModuleNotFoundError:
     from caltrain import (
         check_511_api_health,
         get_caltrain_stops,
+        get_direction,
         get_nearest_station,
         get_next_trains,
         get_stops_in_direction,
@@ -79,6 +81,13 @@ def health():
     """Check if the 511 API is reachable and healthy."""
     ok = check_511_api_health()
     return {"status": "ok" if ok else "degraded", "511_api": "healthy" if ok else "unreachable"}
+
+
+@api_router.get("/direction")
+def direction(from_station: str = Query(..., alias="from"), to_station: str = Query(..., alias="to")):
+    """Infer direction (northbound/southbound) from From + To station names."""
+    d = get_direction(from_station, to_station)
+    return {"direction": d}
 
 
 @api_router.get("/nearest_station")

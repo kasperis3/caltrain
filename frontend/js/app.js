@@ -32,19 +32,9 @@
     var override = el("stop-id-override");
     if (override && data.stop_id) override.value = data.stop_id;
     selectOrAddStation(el("station"), station);
-    if (data.direction) setDirection(data.direction);
-    updateDirectionForStation(station);
-    var dir = el("direction") && el("direction").value;
-    if (station && dir) {
-      loadStopsInDirection(station, dir).then(function (names) {
-        populateToSelect(names);
-        var toS = el("to-station");
-        if (toS) toS.selectedIndex = 0;
-        fetchTrains();
-      });
-    } else if (station) {
-      fetchTrains();
-    }
+    populateToSelect(station);
+    var toSel = el("to-station");
+    if (toSel) toSel.selectedIndex = 0;
     return true;
   }
 
@@ -75,6 +65,7 @@
             names.push(name);
           }
         }
+        allStationNames = names;
         return names;
       });
   }
@@ -96,20 +87,52 @@
       .catch(function () { return []; });
   }
 
-  function populateToSelect(names) {
+  var allStationNames = [];
+
+  function populateToSelect(excludeFrom) {
     var sel = el("to-station");
     if (!sel) return;
     sel.innerHTML = "";
-    var optAny = document.createElement("option");
-    optAny.value = "";
-    optAny.textContent = "Any";
-    sel.appendChild(optAny);
-    for (var i = 0; i < (names || []).length; i++) {
+    var opt0 = document.createElement("option");
+    opt0.value = "";
+    opt0.textContent = "Select destination";
+    sel.appendChild(opt0);
+    var names = (excludeFrom && allStationNames.length) ? allStationNames.filter(function (n) { return n !== excludeFrom; }) : [];
+    for (var i = 0; i < names.length; i++) {
       var opt = document.createElement("option");
       opt.value = names[i];
       opt.textContent = names[i];
       sel.appendChild(opt);
     }
+  }
+
+  function getDirectionAndFetch() {
+    var fromStation = el("station") && el("station").value;
+    var toStation = el("to-station") && el("to-station").value;
+    if (!fromStation || !toStation) return;
+    if (fromStation === toStation) {
+      show(el("error"), true);
+      el("error").textContent = "From and To must be different stations.";
+      return;
+    }
+    var params = "from=" + encodeURIComponent(fromStation) + "&to=" + encodeURIComponent(toStation);
+    fetch("/api/direction?" + params)
+      .then(function (r) { return safeJson(r, {}); })
+      .then(function (data) {
+        var dir = data.direction;
+        if (!dir) {
+          show(el("error"), true);
+          el("error").textContent = "Could not determine direction. Please check your stations.";
+          return;
+        }
+        var hidden = el("direction");
+        if (hidden) hidden.value = dir;
+        fetchTrains();
+      })
+      .catch(function () {
+        show(el("error"), true);
+        el("error").textContent = "Could not determine direction.";
+      });
   }
 
   function populateStationSelect(names) {
@@ -128,69 +151,13 @@
     }
   }
 
-  var NORTH_TERMINUS = "San Francisco";
-  var SOUTH_TERMINI = ["Tamien", "Gilroy"];
-
-  var DIR_COLOR_NORTH = "#1565c0";
-  var DIR_COLOR_SOUTH = "#e65100";
-
-  function setDirection(value) {
-    var hidden = el("direction");
-    if (hidden) hidden.value = value;
-    var btn = el("direction-btn");
-    if (btn) {
-      btn.textContent = value === "southbound" ? "↓" : "↑";
-      btn.title = value === "southbound" ? "Southbound" : "Northbound";
-      btn.setAttribute("aria-label", "Direction: " + (value === "southbound" ? "Southbound" : "Northbound"));
-      btn.classList.remove("direction-northbound", "direction-southbound");
-      btn.classList.add(value === "southbound" ? "direction-southbound" : "direction-northbound");
-      btn.style.color = value === "southbound" ? DIR_COLOR_SOUTH : DIR_COLOR_NORTH;
-    }
-  }
-
-  function isNorthTerminus(name) {
-    return (name || "").trim().toLowerCase() === NORTH_TERMINUS.toLowerCase();
-  }
-  function isSouthTerminus(name) {
-    var n = (name || "").trim().toLowerCase();
-    for (var i = 0; i < SOUTH_TERMINI.length; i++) {
-      if (SOUTH_TERMINI[i].toLowerCase() === n) return true;
-    }
-    return false;
-  }
-
-  function updateDirectionForStation(stationName) {
-    if (!stationName) return;
-    var btn = el("direction-btn");
-    if (isNorthTerminus(stationName)) {
-      setDirection("southbound");
-      if (btn) {
-        btn.classList.add("disabled");
-        btn.setAttribute("aria-disabled", "true");
-        btn.disabled = true;
-      }
-    } else if (isSouthTerminus(stationName)) {
-      setDirection("northbound");
-      if (btn) {
-        btn.classList.add("disabled");
-        btn.setAttribute("aria-disabled", "true");
-        btn.disabled = true;
-      }
-    } else {
-      if (btn) {
-        btn.classList.remove("disabled");
-        btn.removeAttribute("aria-disabled");
-        btn.disabled = false;
-      }
-    }
-  }
-
   function loadDefault() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       var data = JSON.parse(raw);
       var stationSel = el("station");
+      var toSel = el("to-station");
       if (stationSel && data.station) {
         for (var i = 0; i < stationSel.options.length; i++) {
           if (stationSel.options[i].value === data.station) {
@@ -200,12 +167,7 @@
         }
       }
       var station = el("station") && el("station").value;
-      updateDirectionForStation(station);
-      var btn = el("direction-btn");
-      if (station && btn && !btn.disabled && (data.direction === "northbound" || data.direction === "southbound")) {
-        setDirection(data.direction);
-      }
-      var toSel = el("to-station");
+      if (station) populateToSelect(station);
       if (toSel && data.to_station) {
         for (var j = 0; j < toSel.options.length; j++) {
           if (toSel.options[j].value === data.to_station) {
@@ -214,21 +176,16 @@
           }
         }
       }
+      if (station && toSel && toSel.value) getDirectionAndFetch();
     } catch (e) {}
   }
 
   function saveDefault() {
     var station = el("station");
-    var direction = el("direction");
     var toStation = el("to-station");
-    if (!station || !station.value) return;
+    if (!station || !station.value || !toStation || !toStation.value) return;
     try {
-      var saved = {
-        station: station.value,
-        direction: direction ? direction.value : "northbound"
-      };
-      if (toStation && toStation.value) saved.to_station = toStation.value;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ station: station.value, to_station: toStation.value }));
     } catch (e) {}
   }
 
@@ -244,6 +201,8 @@
     var isFirstRow = opts.isFirstRow === true;
     var hasToStation = opts.hasToStation === true;
     var li = document.createElement("li");
+    var minUntil = t.minutes_until;
+    if (minUntil != null && minUntil >= 0 && minUntil <= 10) li.classList.add("train-row-soon");
     var tag = document.createElement("span");
     var slug = (t.service || "other").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
     if (!slug) slug = "other";
@@ -251,7 +210,6 @@
     tag.textContent = t.service || t.destination || "—";
     var timeEl = document.createElement("span");
     timeEl.className = "time";
-    var minUntil = t.minutes_until;
     if (minUntil != null && minUntil >= 0 && minUntil <= 10) timeEl.classList.add("time-soon");
     var timeStr = (t.time || "—").replace(/\s+(PST|PDT)$/i, "");
     timeEl.textContent = timeStr;
@@ -344,6 +302,12 @@
         fetchTrains(currentCount + 5, { append: true });
       };
     }
+    var dirLabel = el("direction-label");
+    if (dirLabel) {
+      var dir = el("direction") && el("direction").value;
+      dirLabel.textContent = dir ? dir.charAt(0).toUpperCase() + dir.slice(1) : "";
+      dirLabel.style.display = dir ? "" : "none";
+    }
     show(el("results"), true);
     saveDefault();
   }
@@ -356,9 +320,9 @@
     var toStation = el("to-station") && el("to-station").value;
     var limit = limitOverride != null ? limitOverride : 5;
 
-    if (!station) {
+    if (!station || !toStation) {
       show(el("error"), true);
-      el("error").textContent = "Choose a station.";
+      el("error").textContent = "Choose From and To stations.";
       show(el("message"), false);
       show(el("results"), false);
       return;
@@ -398,7 +362,7 @@
 
   el("form").addEventListener("submit", function (e) {
     e.preventDefault();
-    fetchTrains();
+    getDirectionAndFetch();
   });
 
   function clearStopIdOverride() {
@@ -406,51 +370,50 @@
     if (o) o.value = "";
   }
 
-  function onStationDirectionOrLimitChange() {
+  function onFromChange() {
     clearStopIdOverride();
     var station = el("station") && el("station").value;
-    updateDirectionForStation(station);
-    var direction = el("direction") && el("direction").value;
-    if (station && direction) {
-      loadStopsInDirection(station, direction).then(function (names) {
-        populateToSelect(names);
-        var toSel = el("to-station");
-        if (toSel) toSel.selectedIndex = 0;
-        fetchTrains();
-      });
-    } else {
-      populateToSelect([]);
-      if (station) fetchTrains();
+    populateToSelect(station);
+    var toSel = el("to-station");
+    if (toSel) toSel.selectedIndex = 0;
+    if (station && (el("to-station") && el("to-station").value)) getDirectionAndFetch();
+  }
+
+  function onToChange() {
+    clearStopIdOverride();
+    if (el("station") && el("station").value && el("to-station") && el("to-station").value) {
+      getDirectionAndFetch();
     }
   }
 
   var stationSel = el("station");
-  if (stationSel) stationSel.addEventListener("change", onStationDirectionOrLimitChange);
-  (function () {
-    var dirBtn = el("direction-btn");
-    if (dirBtn) {
-      dirBtn.addEventListener("click", function () {
-        if (dirBtn.disabled) return;
-        clearStopIdOverride();
-        var next = el("direction").value === "northbound" ? "southbound" : "northbound";
-        setDirection(next);
-        var station = el("station") && el("station").value;
-        var direction = el("direction") && el("direction").value;
-        if (station && direction) {
-          loadStopsInDirection(station, direction).then(function (names) {
-            populateToSelect(names);
-            var toSel = el("to-station");
-            if (toSel) toSel.selectedIndex = 0;
-            fetchTrains();
-          });
-        } else if (station) fetchTrains();
-      });
-    }
-  })();
+  if (stationSel) stationSel.addEventListener("change", onFromChange);
   var toSel = el("to-station");
-  if (toSel) toSel.addEventListener("change", function () {
-    if (el("station") && el("station").value) fetchTrains();
-  });
+  if (toSel) toSel.addEventListener("change", onToChange);
+
+  var reverseBtn = el("reverse-btn");
+  if (reverseBtn) {
+    function doReverse() {
+      var fromSel = el("station");
+      var toSelEl = el("to-station");
+      if (!fromSel || !toSelEl) return;
+      var fromVal = fromSel.value;
+      var toVal = toSelEl.value;
+      if (!fromVal || !toVal) return;
+      clearStopIdOverride();
+      fromSel.value = toVal;
+      populateToSelect(toVal);
+      toSelEl.value = fromVal;
+      getDirectionAndFetch();
+    }
+    reverseBtn.addEventListener("click", doReverse);
+    reverseBtn.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        doReverse();
+      }
+    });
+  }
 
   var useLocationBtn = el("use-location-btn");
   if (useLocationBtn) {
@@ -527,20 +490,10 @@
     if (!skipLoadDefault) {
       clearStopIdOverride();
       loadDefault();
-    }
-    station = station || (el("station") && el("station").value);
-    updateDirectionForStation(station);
-    var direction = el("direction") && el("direction").value || "northbound";
-    setDirection(direction);
-    if (station && direction) {
-      loadStopsInDirection(station, direction).then(function (toNames) {
-        populateToSelect(toNames);
-        if (!skipLoadDefault) loadDefault();
-        else { var toS = el("to-station"); if (toS) toS.selectedIndex = 0; }
-        if (station) fetchTrains();
-      });
     } else if (station) {
-      fetchTrains();
+      populateToSelect(station);
+      var toS = el("to-station");
+      if (toS) toS.selectedIndex = 0;
     }
   }
 

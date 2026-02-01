@@ -28,34 +28,29 @@
         <form id="form" class="selector">
           <input type="hidden" id="direction" name="direction" value="northbound" />
           <input type="hidden" id="stop-id-override" value="" aria-hidden="true" />
-          <div class="selector-inner">
-            <div class="station-rows">
-              <div class="station-row">
-                <label for="station" class="station-label">From</label>
-                <div class="field station-field">
-                  <select id="station" name="station" required aria-label="Station">
-                    <option value="">Loading stations…</option>
-                  </select>
-                </div>
-              </div>
-              <div class="station-row to-row">
-                <label for="to-station" class="station-label">To</label>
-                <div class="field station-field">
-                  <select id="to-station" name="to" aria-label="To station">
-                    <option value="">Any</option>
-                  </select>
-                </div>
-              </div>
+          <div class="route-selector">
+            <div class="route-row route-from">
+              <span class="route-icon route-icon-origin" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+              </span>
+              <select id="station" name="station" required aria-label="From station">
+                <option value="">Select station</option>
+              </select>
             </div>
-            <button
-              type="button"
-              id="direction-btn"
-              class="direction-btn direction-northbound"
-              title="Northbound"
-              aria-label="Direction: Northbound"
-            >
-              ↑
-            </button>
+            <div class="route-dots" aria-hidden="true">
+              <span class="route-dot"></span>
+              <span class="route-dot"></span>
+              <span class="route-dot"></span>
+            </div>
+            <div id="reverse-btn" class="reverse-btn" role="button" tabindex="0" aria-label="Reverse starting point and destination" data-tooltip="Reverse starting point and destination">↕</div>
+            <div class="route-row route-to">
+              <span class="route-icon route-icon-dest" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+              </span>
+              <select id="to-station" name="to" required aria-label="To station">
+                <option value="">Select destination</option>
+              </select>
+            </div>
           </div>
         </form>
 
@@ -64,6 +59,7 @@
         <div id="loading" class="loading" style="display: none">Loading…</div>
 
         <section id="results" class="results" style="display: none">
+          <p id="direction-label" class="direction-label"></p>
           <div class="results-header" aria-hidden="true">
             <span class="results-header__train-type">Train Type</span>
             <span class="results-header__time" id="results-header-time">Departure Time</span>
@@ -92,7 +88,7 @@
         </span>
       </p>
       <p class="footer-line">
-        Your station & direction are saved in this browser.
+        Your From and To stations are saved in this browser.
       </p>
       <p class="footer-line">
         <a href="https://www.caltrain.com" target="_blank" rel="noopener noreferrer">Official Caltrain site</a>

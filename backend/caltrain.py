@@ -370,6 +370,34 @@ def _stop_line_index(stop):
         return len(STATION_LINE_ORDER)
 
 
+def get_direction(from_station, to_station):
+    """
+    Infer direction from From + To using line order.
+    Returns 'northbound', 'southbound', or None if invalid/same station.
+    """
+    if not from_station or not to_station:
+        return None
+    from_name = str(from_station).strip()
+    to_name = str(to_station).strip()
+    if from_name.lower() == to_name.lower():
+        return None
+    from_idx = to_idx = None
+    for i, name in enumerate(STATION_LINE_ORDER):
+        if name and from_name.lower() == name.lower():
+            from_idx = i
+        if name and to_name.lower() == name.lower():
+            to_idx = i
+        if from_idx is not None and to_idx is not None:
+            break
+    if from_idx is None or to_idx is None:
+        return None
+    if from_idx < to_idx:
+        return "southbound"
+    if from_idx > to_idx:
+        return "northbound"
+    return None
+
+
 def get_stops_in_direction(from_station, direction, operator_id=CALTRAIN_OPERATOR_ID):
     """
     Stops that are in the given direction from from_station (same format as get_caltrain_stops).
