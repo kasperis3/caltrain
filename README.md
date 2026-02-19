@@ -112,3 +112,5 @@ With the app running, FastAPI's interactive docs are available at:
 ## API base path
 
 All API routes use the `/api` prefix so nginx can proxy `location /api { ... }` to the backend.
+
+For 1
