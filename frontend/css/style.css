@@ -42,6 +42,7 @@ h1 {
 main {
   width: 100%;
   max-width: 520px;
+  min-width: 0;
 }
 
 .main-content {
@@ -67,7 +68,7 @@ main {
 
 .route-selector {
   display: grid;
-  grid-template-columns: minmax(0, 18rem) 1fr;
+  grid-template-columns: minmax(0, 18rem) 3.5rem;
   grid-template-rows: auto auto auto;
   gap: 0 0.5rem;
   align-items: center;
@@ -164,6 +165,7 @@ main {
 .use-location-btn-standalone {
   display: inline-block;
   width: auto;
+  min-height: 44px;
   margin: 0;
   padding: 0.5rem 1rem;
   font: inherit;
@@ -582,26 +584,45 @@ footer a:hover {
   }
 }
 
-@media (max-width: 420px) {
+@media (max-width: 600px) {
   body {
-    padding: 2rem 1rem 3rem;
-    font-size: 17px;
+    padding: 2rem 1rem 4rem;
+    padding-bottom: calc(2rem + env(safe-area-inset-bottom));
+    font-size: 16px;
   }
 
   h1 {
-    font-size: 1.9rem;
+    font-size: 1.75rem;
   }
 
   .selector {
-    padding: 1.5rem;
+    padding: 1rem;
+    max-width: 100%;
+  }
+
+  .route-selector {
+    grid-template-columns: minmax(0, 1fr) 3.25rem;
+  }
+
+  .route-row select,
+  #station,
+  #to-station {
+    max-width: 100%;
+    min-height: 2.75rem;
   }
 
   #station {
     min-width: 0;
+    font-size: 16px;
+  }
+
+  #to-station {
+    font-size: 16px;
   }
 
   .results {
-    padding: 1.5rem 1.5rem 1.75rem;
+    padding: 1.25rem 1rem 1.5rem;
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
   }
 
   #train-list li {
@@ -609,13 +630,47 @@ footer a:hover {
     padding: 0.75rem 0;
   }
 
+  .see-more {
+    min-height: 2.75rem;
+    padding: 0.5rem 1rem;
+  }
+
+  footer a {
+    display: inline-block;
+    padding: 0.6rem 0.5rem;
+    margin: -0.6rem -0.5rem;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@media (max-width: 420px) {
+  body {
+    padding: 1.5rem 0.75rem 4rem;
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  }
+
+  .selector {
+    padding: 0.75rem;
+  }
+
+  .route-selector {
+    grid-template-columns: minmax(0, 1fr) 3rem;
+  }
+
   .reverse-btn {
-    width: 3rem;
-    height: 3rem;
-    font-size: 1.75rem;
+    width: 2.75rem;
+    height: 2.75rem;
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 1.5rem;
   }
 
   .reverse-btn::after {
     display: none;
+  }
+
+  .use-location-btn-standalone {
+    min-height: 44px;
+    padding: 0.6rem 1rem;
   }
 }
