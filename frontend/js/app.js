@@ -1,5 +1,8 @@
 (function () {
-  var STORAGE_KEY = "caltrain_default";
+  var RECENT_ROUTES_KEY = "caltrain_recent_routes";
+  var LEGACY_STORAGE_KEY = "caltrain_default";
+  var MAX_RECENT_ROUTES = 5;
+  var AUTO_LOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
   var TRAINS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
   var trainsCache = {};
 
@@ -151,42 +154,123 @@
     }
   }
 
-  function loadDefault() {
+  function routePairKey(from, to) {
+    return from.toLowerCase() + "|" + to.toLowerCase();
+  }
+
+  function persistRecentRoutes(routes) {
     try {
-      var raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      var data = JSON.parse(raw);
-      var stationSel = el("station");
-      var toSel = el("to-station");
-      if (stationSel && data.station) {
-        for (var i = 0; i < stationSel.options.length; i++) {
-          if (stationSel.options[i].value === data.station) {
-            stationSel.selectedIndex = i;
-            break;
-          }
-        }
-      }
-      var station = el("station") && el("station").value;
-      if (station) populateToSelect(station);
-      if (toSel && data.to_station) {
-        for (var j = 0; j < toSel.options.length; j++) {
-          if (toSel.options[j].value === data.to_station) {
-            toSel.selectedIndex = j;
-            break;
-          }
-        }
-      }
-      if (station && toSel && toSel.value) getDirectionAndFetch();
+      localStorage.setItem(RECENT_ROUTES_KEY, JSON.stringify({ routes: routes }));
     } catch (e) {}
   }
 
-  function saveDefault() {
-    var station = el("station");
-    var toStation = el("to-station");
-    if (!station || !station.value || !toStation || !toStation.value) return;
+  function loadRecentRoutes() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ station: station.value, to_station: toStation.value }));
+      var raw = localStorage.getItem(RECENT_ROUTES_KEY);
+      if (raw) {
+        var data = JSON.parse(raw);
+        return Array.isArray(data.routes) ? data.routes : [];
+      }
+      var legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (legacyRaw) {
+        var legacy = JSON.parse(legacyRaw);
+        if (legacy.station && legacy.to_station) {
+          var migrated = [{ from: legacy.station, to: legacy.to_station, usedAt: Date.now() }];
+          persistRecentRoutes(migrated);
+          return migrated;
+        }
+      }
     } catch (e) {}
+    return [];
+  }
+
+  function saveRecentRoute(from, to) {
+    if (!from || !to || from === to) return;
+    var routes = loadRecentRoutes();
+    var key = routePairKey(from, to);
+    routes = routes.filter(function (r) {
+      return routePairKey(r.from, r.to) !== key;
+    });
+    routes.unshift({ from: from, to: to, usedAt: Date.now() });
+    if (routes.length > MAX_RECENT_ROUTES) {
+      routes = routes.slice(0, MAX_RECENT_ROUTES);
+    }
+    persistRecentRoutes(routes);
+    renderRecentRoutes();
+  }
+
+  function removeRecentRoute(from, to) {
+    if (!from || !to) return;
+    var key = routePairKey(from, to);
+    var routes = loadRecentRoutes().filter(function (r) {
+      return routePairKey(r.from, r.to) !== key;
+    });
+    persistRecentRoutes(routes);
+    renderRecentRoutes();
+  }
+
+  function applyRoute(from, to) {
+    if (!from || !to) return;
+    clearStopIdOverride();
+    selectOrAddStation(el("station"), from);
+    populateToSelect(from);
+    selectOrAddStation(el("to-station"), to);
+    getDirectionAndFetch();
+  }
+
+  function renderRecentRoutes() {
+    var container = el("recent-routes");
+    var list = el("recent-routes-list");
+    if (!container || !list) return;
+    var routes = loadRecentRoutes();
+    list.innerHTML = "";
+    if (!routes.length) {
+      show(container, false);
+      return;
+    }
+    for (var i = 0; i < routes.length; i++) {
+      var route = routes[i];
+      if (!route.from || !route.to) continue;
+      var wrap = document.createElement("div");
+      wrap.className = "recent-route-chip-wrap";
+
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "recent-route-chip";
+      btn.textContent = route.from + " \u2192 " + route.to;
+      btn.setAttribute("aria-label", "Use route from " + route.from + " to " + route.to);
+
+      var removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "recent-route-chip__remove";
+      removeBtn.textContent = "\u00d7";
+      removeBtn.setAttribute("aria-label", "Remove route from " + route.from + " to " + route.to);
+
+      (function (from, to) {
+        btn.addEventListener("click", function () {
+          applyRoute(from, to);
+        });
+        removeBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          removeRecentRoute(from, to);
+        });
+      })(route.from, route.to);
+
+      wrap.appendChild(btn);
+      wrap.appendChild(removeBtn);
+      list.appendChild(wrap);
+    }
+    show(container, list.children.length > 0);
+  }
+
+  function autoLoadRecentIfFresh(fromHint) {
+    var routes = loadRecentRoutes();
+    if (!routes.length) return;
+    var latest = routes[0];
+    if (!latest.from || !latest.to) return;
+    if (Date.now() - latest.usedAt > AUTO_LOAD_MAX_AGE_MS) return;
+    if (fromHint && latest.from.toLowerCase() !== fromHint.toLowerCase()) return;
+    applyRoute(latest.from, latest.to);
   }
 
   function refreshedNow() {
@@ -309,7 +393,9 @@
       dirLabel.style.display = dir ? "" : "none";
     }
     show(el("results"), true);
-    saveDefault();
+    var fromStation = el("station") && el("station").value;
+    var toStationVal = el("to-station") && el("to-station").value;
+    if (fromStation && toStationVal) saveRecentRoute(fromStation, toStationVal);
   }
 
   function fetchTrains(limitOverride, opts) {
@@ -486,20 +572,14 @@
   updateApiStatus();
   setInterval(updateApiStatus, 60000);
 
-  function finishInitWithStation(station, skipLoadDefault) {
-    if (!skipLoadDefault) {
-      clearStopIdOverride();
-      loadDefault();
-    } else if (station) {
-      populateToSelect(station);
-      var toS = el("to-station");
-      if (toS) toS.selectedIndex = 0;
-    }
+  function finishInitWithoutGeo() {
+    clearStopIdOverride();
+    autoLoadRecentIfFresh();
   }
 
   function tryLocationOnLoad() {
     if (!navigator.geolocation) {
-      finishInitWithStation(null, false);
+      finishInitWithoutGeo();
       return;
     }
     navigator.geolocation.getCurrentPosition(
@@ -510,14 +590,18 @@
         fetch("/api/nearest_station?" + params)
           .then(function (r) { return safeJson(r, { station: null, direction: null, stop_id: null }); })
           .then(function (data) {
-            if (!applyNearestStation(data)) finishInitWithStation(null, false);
+            if (applyNearestStation(data)) {
+              autoLoadRecentIfFresh(data.station);
+            } else {
+              finishInitWithoutGeo();
+            }
           })
           .catch(function () {
-            finishInitWithStation(null, false);
+            finishInitWithoutGeo();
           });
       },
       function () {
-        finishInitWithStation(null, false);
+        finishInitWithoutGeo();
       },
       { timeout: 5000, maximumAge: 0 }
     );
@@ -526,7 +610,7 @@
   loadStations()
     .then(function (names) {
       populateStationSelect(names);
-      loadDefault();
+      renderRecentRoutes();
       tryLocationOnLoad();
     })
     .catch(function () {
