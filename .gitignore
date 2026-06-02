@@ -1,6 +1,9 @@
 .env
 backend/.env
-certbot/
+# ACME webroot (ignore challenge files, keep build artifacts)
+certbot/*
+!certbot/Dockerfile
+!certbot/deploy-hook.sh
 __pycache__/
 */__pycache__/
 *.pyc
